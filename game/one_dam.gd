@@ -4,6 +4,7 @@ const Pool = preload("res://game/one_dam_water.gd")
 const Flow = preload("res://game/one_dam_grid.gd")
 const Breach = preload("res://game/one_dam_breach.gd")
 const View = preload("res://game/one_dam_view.gd")
+const Controls = preload("res://game/one_dam_controls.gd")
 const PIXELS := Vector2i(640, 400)
 const SCALE := 4.0
 const DETAIL := 2.0
@@ -23,7 +24,6 @@ var lower_breach := Breach.new()
 var lower := Pool.new()
 var canvas := SubViewport.new()
 var scene := View.new()
-var font := SystemFont.new()
 var gate := Button.new()
 var creek: AudioStreamPlayer
 var music: AudioStreamPlayer
@@ -113,33 +113,25 @@ func _exit_tree() -> void:
 	Input.set_default_cursor_shape(Input.CURSOR_ARROW)
 
 func build_controls() -> void:
-	font.font_names = ["PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC"]
 	var overlay := CanvasLayer.new()
 	add_child(overlay)
-
-	overlay.add_child(configure_button(gate, "放水", Vector2(1059, 30), 100, opening))
-	overlay.add_child(configure_button(Button.new(), "重来", Vector2(1170, 30), 73, restart))
-
-func configure_button(button: Button, title: String, position: Vector2, width: float, action: Callable) -> Button:
-	button.text = title
-	button.position = position
-	button.size = Vector2(width, 41)
-	button.focus_mode = Control.FOCUS_NONE
-	button.add_theme_font_override("font", font)
-	button.add_theme_font_size_override("font_size", 15)
-	button.add_theme_color_override("font_color", Color("#fff0c7"))
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color("#172823e8")
-	normal.border_color = Color("#829073")
-	normal.set_border_width_all(1)
-	button.add_theme_stylebox_override("normal", normal)
-	var rollover := normal.duplicate() as StyleBoxFlat
-	rollover.bg_color = Color("#344c39")
-	button.add_theme_stylebox_override("hover", rollover)
-	button.add_theme_stylebox_override("pressed", rollover)
-	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	button.pressed.connect(action)
-	return button
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 12)
+	actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(actions)
+	var art := Controls.new()
+	var reset := Button.new()
+	art.configure(gate, "放水", true, opening)
+	art.configure(reset, "重来", false, restart)
+	actions.add_child(gate)
+	actions.add_child(reset)
+	var group_size := actions.get_combined_minimum_size()
+	var margin := Vector2(24, 22)
+	actions.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	actions.offset_left = -group_size.x - margin.x
+	actions.offset_top = -group_size.y - margin.y
+	actions.offset_right = -margin.x
+	actions.offset_bottom = -margin.y
 
 func audio(path: String, volume: float, loop := false) -> AudioStreamPlayer:
 	var player := AudioStreamPlayer.new()
@@ -205,6 +197,9 @@ func _process(delta: float) -> void:
 	gate.disabled = model.wall.is_empty() and lower.wall.is_empty()
 	var fade := maxf(0.001, smoothstep(0.0, 1.3, scene.clock))
 	music.volume_db = -12.0 + linear_to_db(fade)
+	var current := maxf(water.discharge_at(151.0), water.discharge_at(249.0))
+	var creek_level := lerpf(-5.0, -2.0, smoothstep(0.35, 2.5, current))
+	creek.volume_db = lerpf(creek.volume_db, creek_level, 1.0 - exp(-delta * 0.75))
 
 func find_piece(point: Vector2) -> Pool.Piece:
 	var closest: Pool.Piece
@@ -233,8 +228,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.physical_keycode in [KEY_ENTER, KEY_SPACE]:
 			opening()
 		return
-	if event is InputEventMouseMotion and (held != null or held_floater != null):
-		update_grab(stage_pointer(event.position))
+	if event is InputEventMouseMotion:
+		var pointer := stage_pointer(event.position)
+		scene.summer.disturb_perch(pointer)
+		if held != null or held_floater != null:
+			update_grab(pointer)
 		return
 	if event is not InputEventMouseButton:
 		return
@@ -261,6 +259,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			var target := scene.from_screen(point)
 			held_floater.afloat = scene.is_wet(target)
 			held_floater.point = target
+			held_floater.drift = Vector2.ZERO
+			held_floater.caught = false
 			if held_floater.ambient:
 				held_floater.ambient = false
 				held_floater.shore = Vector2(57.0, 60.0)
@@ -285,11 +285,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			scene.riffle.erase(held)
 			target_pool.place(held, target, support)
 			if support == null:
-				scene.burst(target, 0.35)
+				scene.material_touch(target, held.kind == Pool.EARTH)
 			if can_play_audio():
 				clack.pitch_scale = 1.1 if held.kind == Pool.EARTH else 0.92
 				clack.play()
-		elif support == null and not from_bank and absf(target.y) > 37.0 and View.SAFE_BANK.has_point(point):
+		elif can_return_to_bank(point, target, support):
 			pool_for(held.point.x).detach(held)
 			held.point = target
 			held.visible_lift = 0.0
@@ -324,7 +324,8 @@ func update_grab(point: Vector2) -> void:
 		return
 	var support := support_at(point, held)
 	var target := drop_point(point, support)
-	scene.clear_drop = can_drop(held, target, support)
+	scene.clear_drop = grab.distance_to(point) >= 5.0 and (
+		can_drop(held, target, support) or can_return_to_bank(point, target, support))
 	scene.preview_lift = 0.0 if support == null else support.radius * 0.66
 
 func cancel_grab() -> void:
@@ -341,6 +342,9 @@ func _notification(what: int) -> void:
 func can_drop(piece: Pool.Piece, target: Vector2, support: Pool.Piece = null) -> bool:
 	var building_reach := (target.x >= 92.0 and target.x <= 202.0) or (target.x >= 227.0 and target.x <= 301.0)
 	return building_reach and absf(target.y) <= Pool.BANK + 4.0 and pool_for(target.x).can_place(piece, target, support)
+
+func can_return_to_bank(cursor: Vector2, target: Vector2, support: Pool.Piece) -> bool:
+	return support == null and not from_bank and absf(target.y) > 37.0 and View.SAFE_BANK.has_point(cursor)
 
 func opening() -> void:
 	var basin := model if not model.wall.is_empty() else lower
