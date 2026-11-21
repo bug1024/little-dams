@@ -54,9 +54,9 @@ void fragment() {
 	float moss = bank * damp * smoothstep(0.50, 0.79, patches + veins * 0.17 + shade * 0.15);
 	damp_gravel = mix(damp_gravel, vec3(0.20, 0.26, 0.14) * (0.79 + pebble * 0.48), moss * 0.75);
 
-	float deep = smoothstep(0.12, 0.90, depth);
-	float held_water = max(backed_water(art_uv.x, upper_pool), backed_water(art_uv.x, lower_pool));
-	held_water *= smoothstep(0.20, 0.62, depth);
+	float deep = smoothstep(0.19, 0.67, depth);
+	float pool_extent = max(backed_water(art_uv.x, upper_pool), backed_water(art_uv.x, lower_pool));
+	float held_water = pool_extent * smoothstep(0.20, 0.62, depth);
 	vec3 shallow_water = plate * vec3(0.81, 0.86, 0.83) + vec3(0.036, 0.022, 0.005);
 	shallow_water = mix(shallow_water, damp_gravel * vec3(0.85, 1.09, 1.14), 0.30 + bank * 0.21);
 	vec3 pool = mix(vec3(0.073, 0.19, 0.23), plate * vec3(0.51, 0.63, 0.80), 0.54);
@@ -87,15 +87,26 @@ void fragment() {
 	ripple *= step(0.61, cos(motion.y * 0.38 + motion.x * 0.064));
 	water = mix(water, vec3(0.55, 0.79, 0.76), ripple * (0.058 + speed * 0.24) * (1.0 - held_water * 0.42));
 	float broken_crest = step(0.66, earth_patch(motion / vec2(12.0, 2.6)));
-	water = mix(water, vec3(0.74, 0.87, 0.81), broken_crest * push * smoothstep(0.13, 0.45, speed) * 0.39);
-	float edge = 0.068 + sin(pixel.x * 0.063 + creek_time * 1.2) * 0.005;
-	float rim = 1.0 - smoothstep(0.05, 0.16, channel.g);
-	float meniscus = max(1.0 - smoothstep(0.002, 0.019, abs(depth - edge)), rim);
+	float live_crest = push * smoothstep(0.065, 0.38, speed);
+	water = mix(water, vec3(0.27, 0.51, 0.49), live_crest * 0.22);
+	water = mix(water, vec3(0.78, 0.90, 0.85), broken_crest * live_crest * 0.50);
+	// Gravel shelves stay exposed in the open creek. As local depth rises, the
+	// contact line crosses the shelf, following the same contour as the water fill.
+	float shelf = smoothstep(0.30, 0.96, abs(row - 0.5) * 2.0);
+	float edge = 0.072 + shelf * (0.126 + patches * 0.040);
+	float waterline = depth - edge;
+	float cover = smoothstep(-0.025, 0.018, waterline);
+	cover = mix(cover, 1.0, push * smoothstep(0.040, 0.15, depth) * 0.52);
+	float rim = (1.0 - smoothstep(0.035, 0.14, channel.g)) * smoothstep(0.015, 0.10, waterline);
+	float meniscus = max(1.0 - smoothstep(0.002, 0.021, abs(waterline - 0.006)), rim * 0.57);
 	float foam = step(0.59, earth_patch(vec2(motion.x * 0.075, pixel.y * 0.25))) * smoothstep(0.02, 0.30, speed);
-	water = mix(water, vec3(0.68, 0.80, 0.70), meniscus * (0.03 + foam * 0.38));
+	float shore_highlight = meniscus * (0.13 + pool_extent * 0.30 + foam * 0.33) * (0.68 + patches * 0.32);
+	water = mix(water, vec3(0.68, 0.80, 0.72), shore_highlight);
 
-	float cover = smoothstep(0.034, 0.101, depth);
 	float value = dot(water, vec3(0.26, 0.63, 0.11));
 	water = mix(water, value * vec3(0.86, 1.01, 0.99), 0.18 + deep * 0.08);
+	// A moving film can still trace the pebbles below a nearly drained dam.
+	float trickle = smoothstep(0.009, 0.072, depth) * smoothstep(0.018, 0.14, speed) * (1.0 - shelf * 0.75);
+	cover = mix(cover, 1.0, trickle * 0.45);
 	COLOR = vec4(afternoon_light(mix(mix(gravel, damp_gravel, damp), water, cover), art_uv, max(cover, damp * 0.59)), channel.r);
 }

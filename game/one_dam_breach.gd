@@ -28,7 +28,10 @@ func reset() -> void:
 	mouth_width = 1.0
 
 func open(point: Vector2, flow: Flow, gate := false) -> void:
-	if not gate and (prying or (phase in [Phase.OPENING, Phase.JET, Phase.SURGE] and origin.distance_to(point) < 20.0)):
+	if phase in [Phase.OPENING, Phase.JET, Phase.SURGE] and origin.distance_to(point) < 20.0:
+		prying = prying or (gate and phase != Phase.SURGE)
+		return
+	if not gate and prying:
 		return
 	origin = point
 	prying = gate
@@ -71,7 +74,7 @@ func advance(dt: float, flow: Flow) -> void:
 			elif age > 0.38 and not prying:
 				transition(Phase.AFTERMATH)
 		Phase.JET:
-			if not prying and age >= 0.17 and opening_head > 0.45 and peak > 0.37 and force > peak * 0.28:
+			if not prying and age >= 0.067 and opening_head > 0.40 and peak > 0.34 and force > peak * 0.28:
 				transition(Phase.SURGE)
 				crest.emit(origin, clampf(0.72 + peak * 0.55, 0.8, 2.0))
 			elif not prying and age > 0.28 and (force < maxf(0.048, peak * 0.27) or age > 1.20):

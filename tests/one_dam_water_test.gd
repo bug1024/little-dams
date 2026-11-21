@@ -17,7 +17,10 @@ func run() -> void:
 	game = Scene.instantiate()
 	root.add_child(game)
 	game.set_process(false)
+	check_bank_drops()
+	check_free_build()
 	check_breaches()
+	check_repeated_release()
 	check_downstream()
 	check_stone_weight()
 	check_support_loss()
@@ -78,6 +81,76 @@ func frames(count: int) -> void:
 	for i in count:
 		game._process(1.0 / 60.0)
 
+func drag_piece(piece: Materials.Piece, target: Vector2) -> void:
+	for down in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.pressed = down
+		var at := game.scene.piece_screen(piece) if down else game.scene.to_screen(target)
+		event.position = at * OneDam.SCALE
+		game._unhandled_input(event)
+
+func check_bank_drops() -> void:
+	var stone := game.scene.bank[0]
+	var count := game.scene.bank.size()
+	var road_edge := game.scene.from_screen(Vector2(26, 185))
+	drag_piece(stone, road_edge)
+	expect(stone.point.is_equal_approx(road_edge) and game.scene.bank.size() == count, "A loose stone can be moved to the edge of the path")
+	drag_piece(stone, Vector2(84, 0))
+	expect(game.model.wall.has(stone) and not game.scene.bank.has(stone), "Stones can be placed in previously restricted water")
+	drag_piece(stone, road_edge)
+	expect(stone.point.is_equal_approx(road_edge) and game.scene.bank.has(stone) and game.model.wall.is_empty(),
+		"A built stone can be taken out and left on the path")
+	game.restart()
+
+func check_free_build() -> void:
+	var starting_head := game.water.pool_head(148.0)
+	expect(game.model.wall.is_empty() and game.lower.wall.is_empty() and game.scene.riffle.is_empty()
+		and game.gate.disabled and starting_head <= 0.22, "Start with a shallow creek and all materials on shore")
+	frames(180)
+	var upstream := Vector2(133.0, 0.0)
+	var shelf := Vector2(133.0, 24.0)
+	var head_before := game.water.depth_at(upstream)
+	var shelf_before := game.water.depth_at(shelf)
+	var stones: Array[Materials.Piece] = []
+	for slot in [0, 3, 8, 11, 12, 14]:
+		stones.append(game.scene.bank[slot])
+	for i in stones.size():
+		drag_piece(stones[i], Vector2(143.0 + (i % 2) * 7.0, -30.0 + i * 12.0))
+	var mud: Array[Materials.Piece] = []
+	for piece in game.scene.bank:
+		if piece.kind == Materials.EARTH:
+			mud.append(piece)
+	for i in 4:
+		drag_piece(mud[i], Vector2(160.0, -24.0 + i * 16.0))
+	frames(60)
+	var early := game.water.depth_at(upstream)
+	frames(840)
+	expect(game.water.depth_at(upstream) > maxf(head_before + 0.14, early + 0.09)
+		and game.water.depth_at(shelf) > shelf_before + 0.09,
+		"Player-placed materials raise water gradually and cover the upstream shelf (%.2f / %.2f / %.2f)" % [head_before, early, game.water.depth_at(upstream)])
+	game.restart()
+	expect(game.model.wall.is_empty() and game.lower.wall.is_empty() and game.gate.disabled
+		and is_equal_approx(game.water.pool_head(148.0), starting_head), "Restart removes the player's dam and its pool")
+
+func seed_test_dam(filled := true) -> void:
+	# Stable physical fixture for release comparisons, independent of the free-build startup.
+	for row in [
+		[147, -31, 11, Materials.STONE], [144, -18, 11, Materials.STONE],
+		[146, -8, 7, Materials.EARTH], [148, 0, 10, Materials.STONE],
+		[153, 20, 12, Materials.STONE], [147, 31, 10, Materials.STONE],
+		[158, -24, 8, Materials.STONE], [163, 26, 7, Materials.STONE],
+		[137, 24, 7, Materials.EARTH], [153, -13, 7, Materials.EARTH], [160, 15, 7, Materials.EARTH],
+	]:
+		var piece := put(game.model, Vector2(row[0], row[1]), row[2], row[3])
+		if row[3] == Materials.EARTH and absf(row[1]) < 12.0:
+			piece.wear = 0.20
+	var support := put(game.model, Vector2(149, 10), 8.0, Materials.EARTH)
+	support.wear = 0.20
+	var chip := Materials.Piece.new(support.point + Vector2(2.0, 3.5), 3.5, Materials.STONE, 1)
+	game.model.place(chip, chip.point, support)
+	game.water.reset(148.0, filled, 0.91)
+
 func check_breaches() -> void:
 	var low := release_case(true, false)
 	var high := release_case(false, false)
@@ -90,10 +163,24 @@ func check_breaches() -> void:
 		"A backed-up pool first flows through a small slit, then opens to a wider crest")
 	expect(high.outlet_gain > 0.22 and high.downstream_surge > 0.32, "Measured flood reaches downstream beyond the gate")
 
+func check_repeated_release() -> void:
+	game.restart()
+	seed_test_dam()
+	frames(90)
+	var before := game.model.wall.size()
+	game.opening()
+	var pilot := game.gate_plug
+	game.opening()
+	var second := game.gate_plug
+	game.opening()
+	var accepted := pilot != null and second != null and pilot != second and game.model.wall.size() == before - 2
+	frames(16)
+	expect(accepted and game.model.wall.size() < before - 2 and game.canvas.canvas_transform == Transform2D.IDENTITY,
+		"Three rapid presses open successive gaps and the camera stays fixed")
+
 func release_case(shallow: bool, at_bank: bool) -> Dictionary:
 	game.restart()
-	if shallow:
-		game.water.reset(146.0, false)
+	seed_test_dam(not shallow)
 	frames(90)
 	var count := game.model.wall.size()
 	var head_drop := game.scene.pool_profile(game.model, 146.0).y
@@ -141,6 +228,7 @@ func check_downstream() -> void:
 
 func downstream_case(release: bool) -> int:
 	game.restart()
+	seed_test_dam()
 	for y in [-30.0, -18.0, -6.0, 6.0, 18.0, 30.0]:
 		var piece := put(game.lower, Vector2(229, y), 8.0, Materials.EARTH)
 		piece.wear = 0.60
@@ -181,6 +269,7 @@ func check_support_loss() -> void:
 
 func check_floater_release() -> void:
 	game.restart()
+	seed_test_dam()
 	frames(42)
 	var twig := game.scene.floaters[1]
 	twig.point = Vector2(129, 0)

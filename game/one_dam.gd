@@ -138,6 +138,7 @@ func build_controls() -> void:
 	var art := Controls.new()
 	var reset := Button.new()
 	art.configure(gate, "放水", true, opening)
+	gate.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	art.configure(reset, "重来", false, restart)
 	actions.add_child(gate)
 	actions.add_child(reset)
@@ -179,36 +180,19 @@ func restart() -> void:
 	seep_cooldown = 2.4
 	gate_plug = null
 	gate_pool = null
-	canvas.canvas_transform = Transform2D.IDENTITY
 	clack.stop()
 	if water_jet != null:
 		water_jet.stop()
 		water_crest.stop()
 		stone_splash.stop()
-	for row in [
-		[147, -31, 11, Pool.STONE, 0], [144, -18, 11, Pool.STONE, 2],
-		[146, -8, 7, Pool.EARTH, 1], [148, 0, 10, Pool.STONE, 3],
-		[153, 20, 12, Pool.STONE, 2],
-		[147, 31, 10, Pool.STONE, 0], [158, -24, 8, Pool.STONE, 1],
-		[163, 26, 7, Pool.STONE, 3], [137, 24, 7, Pool.EARTH, 1],
-		[153, -13, 7, Pool.EARTH, 2], [160, 15, 7, Pool.EARTH, 1],
-	]:
-		var piece := Pool.Piece.new(Vector2(row[0], row[1]), row[2], row[3], row[4])
-		model.wall.append(piece)
-		if row[3] == Pool.EARTH and absf(row[1]) < 12.0:
-			piece.wear = 0.20
-	var mud_support := Pool.Piece.new(Vector2(149, 10), 8.0, Pool.EARTH, 0)
-	model.place(mud_support, mud_support.point, null)
-	mud_support.wear = 0.20
-	var chip := Pool.Piece.new(mud_support.point + Vector2(2.0, 3.5), 3.5, Pool.STONE, 1)
-	model.place(chip, chip.point, mud_support)
-
 	for row in [[73, 50, 12, 0], [98, 48, 12, 1], [127, 57, 9, 0], [163, 52, 11, 1], [189, 56, 15, 0], [241, 47, 17, 0], [264, 44, 10, 1], [292, 48, 9, 0], [243, -61, 13, 0], [275, -63, 10, 1], [296, -57, 15, 0],
-			[95, -75, 11, 0], [124, -70, 10, 1], [161, -71, 9, 0], [195, -70, 12, 0]]:
+			[95, -75, 11, 0], [124, -70, 10, 1], [161, -71, 9, 0], [195, -70, 12, 0],
+			[111, -46, 7, Pool.EARTH], [164, -52, 8, Pool.EARTH], [211, 47, 8, Pool.EARTH], [283, 49, 6, Pool.EARTH],
+			[137, 47, 7, Pool.STONE], [227, -45, 7, Pool.STONE], [279, 40, 5, Pool.STONE]]:
 		scene.bank.append(Pool.Piece.new(Vector2(row[0], row[1]), row[2], row[3], row[0] % 4))
-	water.reset(148.0, true, 0.91)
+	water.reset(148.0, false)
 	water.rebuild_obstacles(model, lower)
-	gate.disabled = false
+	gate.disabled = true
 
 func _process(delta: float) -> void:
 	knock_cooldown = maxf(0.0, knock_cooldown - delta)
@@ -225,12 +209,11 @@ func _process(delta: float) -> void:
 		lower_breach.advance(STEP, water)
 		lag -= STEP
 	scene.advance(delta)
-	canvas.canvas_transform = Transform2D(0.0, scene.shake_offset() * DETAIL)
 	var pointer := stage_pointer(get_global_mouse_position())
 	update_grab(pointer)
 	scene.hovered = find_piece(pointer)
 	scene.hovered_floater = null if scene.hovered != null else scene.floater_at(pointer)
-	gate.disabled = gate_plug != null or (model.wall.is_empty() and lower.wall.is_empty())
+	gate.disabled = model.wall.is_empty() and lower.wall.is_empty()
 	var fade := maxf(0.001, smoothstep(0.0, 1.3, scene.clock))
 	music.volume_db = -12.0 + linear_to_db(fade)
 	var current := maxf(water.discharge_at(151.0), water.discharge_at(249.0))
@@ -332,11 +315,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			if can_play_audio():
 				clack.pitch_scale = 1.1 if held.kind == Pool.EARTH else 0.92
 				clack.play()
-		elif can_return_to_bank(point, target, support):
+		elif can_return_to_bank(point):
 			pool_for(held.point.x).detach(held)
-			held.point = target
+			scene.riffle.erase(held)
+			held.point = scene.from_screen(point)
 			held.visible_lift = 0.0
-			scene.bank.append(held)
+			held.notch = 0.0
+			if not scene.bank.has(held):
+				scene.bank.append(held)
 	cancel_grab()
 
 func pool_for(x: float) -> Pool:
@@ -359,7 +345,7 @@ func drop_point(cursor: Vector2, support: Pool.Piece) -> Vector2:
 	return scene.from_screen(cursor + Vector2(0, elevation))
 
 func stage_pointer(point: Vector2) -> Vector2:
-	return point / SCALE - canvas.canvas_transform.origin / DETAIL
+	return point / SCALE
 
 func update_grab(point: Vector2) -> void:
 	scene.pointer = point
@@ -368,7 +354,7 @@ func update_grab(point: Vector2) -> void:
 	var support := support_at(point, held)
 	var target := drop_point(point, support)
 	scene.clear_drop = grab.distance_to(point) >= 5.0 and (
-		can_drop(held, target, support) or can_return_to_bank(point, target, support))
+		can_drop(held, target, support) or can_return_to_bank(point))
 	scene.preview_lift = 0.0 if support == null else support.radius * 0.66
 
 func cancel_grab() -> void:
@@ -383,15 +369,16 @@ func _notification(what: int) -> void:
 		cancel_grab()
 
 func can_drop(piece: Pool.Piece, target: Vector2, support: Pool.Piece = null) -> bool:
-	var building_reach := (target.x >= 92.0 and target.x <= 202.0) or (target.x >= 227.0 and target.x <= 301.0)
-	return building_reach and absf(target.y) <= Pool.BANK + 4.0 and pool_for(target.x).can_place(piece, target, support)
+	var contact := scene.to_screen(target)
+	return Rect2(Vector2.ZERO, View.SIZE).has_point(contact) and absf(target.y) <= Pool.BANK + 4.0 and (
+		support != null or not scene.on_bank(contact)) and pool_for(target.x).can_place(piece, target, support)
 
-func can_return_to_bank(cursor: Vector2, target: Vector2, support: Pool.Piece) -> bool:
-	return support == null and not from_bank and absf(target.y) > 37.0 and View.SAFE_BANK.has_point(cursor)
+func can_return_to_bank(cursor: Vector2) -> bool:
+	return Rect2(Vector2.ZERO, View.SIZE).has_point(cursor) and scene.on_bank(cursor)
 
 func opening() -> void:
 	if gate_plug != null:
-		return
+		finish_gate()
 	var basin := model if not model.wall.is_empty() else lower
 	var plug: Pool.Piece
 	var best := INF
@@ -410,33 +397,47 @@ func opening() -> void:
 		gate_pool = basin
 		var event := lower_breach if basin == lower else upper_breach
 		event.open(plug.point, water, true)
-		scene.track_release(plug.point.x, true)
-		plug.notch = 0.30
+		scene.track_release(plug.point.x)
+		plug.notch = maxf(plug.notch, 0.48)
 		event.pilot_limit = maxf(1.5, plug.radius * plug.notch * 0.65)
-		scene.nudge_camera(0.10)
+		var seam := plug.point + Vector2(plug.radius * 0.78, 0.0)
+		if scene.is_wet(seam):
+			scene.burst(seam, 0.25)
 		play_knock(1.08)
 
 func advance_gate(dt: float) -> void:
 	if gate_plug == null:
 		return
 	if not gate_pool.wall.has(gate_plug):
-		var event := lower_breach if gate_pool == lower else upper_breach
-		event.prying = false
-		gate_plug = null
-		gate_pool = null
+		finish_gate()
 		return
 	# The pry opens the first slit. Water pushing through it advances the break.
 	var push := smoothstep(0.10, 0.82, water.gap_flow(gate_plug.point))
-	gate_plug.notch = minf(1.0, gate_plug.notch + dt * (0.72 + push * 1.52))
+	gate_plug.notch = minf(1.0, gate_plug.notch + dt * (2.90 + push * 1.60))
 	var event := lower_breach if gate_pool == lower else upper_breach
 	event.pilot_limit = maxf(1.5, gate_plug.radius * gate_plug.notch * 0.65)
 	if gate_plug.notch >= 1.0:
-		var piece := gate_plug
-		var basin := gate_pool
-		event.prying = false
-		gate_plug = null
-		gate_pool = null
-		basin.remove(piece, clampf(water.pool_head(piece.point.x) * 1.57, 0.4, 1.8))
+		finish_gate()
+
+func finish_gate() -> void:
+	var piece := gate_plug
+	var basin := gate_pool
+	var event := lower_breach if basin == lower else upper_breach
+	event.prying = false
+	gate_plug = null
+	gate_pool = null
+	if not basin.wall.has(piece):
+		return
+	var head := water.pool_head(piece.point.x)
+	basin.remove(piece, clampf(head * 1.57, 0.4, 1.8))
+	var pressure := smoothstep(0.16, 0.52, head - water.channel_depth(piece.point.x + 19.0))
+	if pressure > 0.0:
+		# The pressurized slit punches through soft backfill in the same flow path.
+		for backfill in basin.wall:
+			var offset := backfill.point - piece.point
+			if backfill.kind == Pool.EARTH and backfill.support == null and offset.x > 2.0 and (
+				offset.x < piece.radius + backfill.radius and absf(offset.y) < backfill.radius * 0.78):
+				backfill.notch = maxf(backfill.notch, pressure * 0.81)
 
 func on_released(piece: Pool.Piece, force: float, lower_basin: bool) -> void:
 	if held == piece:
