@@ -13,6 +13,7 @@ const STEP := 1.0 / 30.0
 
 # Rates are in cell-volume units per second. All internal transfers use one face per pair.
 var inlet_rate := 1.85
+var rain_runoff := 0.0
 var mobility := 6.7
 var cross_mobility := 0.68
 var obstacle_height := 1.0
@@ -82,6 +83,7 @@ func reset(dam_x: float, filled := true, stored_depth := 0.83) -> void:
 	last_input = 0.0
 	last_output = 0.0
 	last_seepage = 0.0
+	rain_runoff = 0.0
 
 func rebuild_obstacles(upstream: Materials, downstream: Materials) -> void:
 	crest_x.fill(0.0)
@@ -165,8 +167,10 @@ func tick(dt: float, upstream: Materials, downstream: Materials) -> void:
 			east[i] *= donor_scale[i if east[i] >= 0.0 else i + 1]
 			south[i] *= donor_scale[i if south[i] >= 0.0 else i + COLUMNS]
 
+	var local_rain := rain_runoff * 3.6 / COUNT
+	last_input += local_rain * COUNT * dt
 	for y in ROWS:
-		var incoming := (1.0 - absf(row_y(y)) / BANK) * inlet_rate / (ROWS * 0.5 + 0.5 / ROWS)
+		var incoming := (1.0 - absf(row_y(y)) / BANK) * (inlet_rate + rain_runoff * 2.65) / (ROWS * 0.5 + 0.5 / ROWS)
 		last_input += incoming * dt
 		for x in COLUMNS:
 			var i := index(x, y)
@@ -177,8 +181,13 @@ func tick(dt: float, upstream: Materials, downstream: Materials) -> void:
 			var north_silt := transported_sediment(i - COLUMNS, i, from_north) if y > 0 else 0.0
 			var east_silt := transported_sediment(i, i + 1, east[i])
 			var south_silt := transported_sediment(i, i + COLUMNS, south[i])
-			depth[i] = maxf(0.0, depth[i] + dt * (from_west + from_north - east[i] - south[i] - sink))
+			depth[i] = maxf(0.0, depth[i] + dt * (from_west + from_north - east[i] - south[i] - sink + local_rain))
 			var sediment_delta := west_silt + north_silt - east_silt - south_silt - sink * concentration[i]
+			if rain_runoff > 0.0:
+				# Rain stirs fine sediment locally, while the upstream runoff also carries soil in.
+				sediment_delta += rain_runoff * 0.11 * maxf(0.0, depth[i] - sediment[i])
+				if x == 0:
+					sediment_delta += incoming * rain_runoff * 0.52
 			sediment[i] = clampf((sediment[i] + sediment_delta * dt) * (1.0 - 0.16 * dt), 0.0, depth[i])
 			last_seepage += sink * dt
 		last_output += east[index(COLUMNS - 1, y)] * dt

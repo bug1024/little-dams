@@ -14,6 +14,7 @@ uniform vec2 lower_pool;
 uniform float bed_refraction : hint_range(0.0, 1.0) = 1.0;
 uniform float bank_foam : hint_range(0.0, 1.0) = 1.0;
 uniform vec4 wind_travel;
+uniform float rain_intensity;
 const vec2 WIND = vec2(0.94, 0.34);
 
 float backed_water(float x, vec2 pond) {
@@ -112,6 +113,7 @@ void fragment() {
 	float breeze = wind_at(art_uv.x);
 	float lit = 1.0 - shade * 0.65;
 	float sun = lit * smoothstep(0.35, 0.9, art_uv.x + art_uv.y * 0.52) * (0.61 + sunlight_at(art_uv) * 0.59);
+	sun *= 1.0 - rain_intensity * 0.73;
 	float glint = step(0.93, sin(pixel.x * 0.123 - creek_time * 1.6 + sin(pixel.y * 0.29)));
 	glint *= smoothstep(0.47, 0.72, earth_patch(pixel / vec2(11.0, 3.5) - shore.gb * 0.025));
 	water = mix(water, vec3(0.83, 0.88, 0.80), glint * sun * (1.0 - deep * 0.76) * (0.26 + breeze * 0.12));

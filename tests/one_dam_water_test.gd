@@ -25,6 +25,7 @@ func run() -> void:
 	check_stone_weight()
 	check_support_loss()
 	check_floater_release()
+	check_rain()
 	game.free()
 	quit(failures)
 
@@ -281,3 +282,30 @@ func check_floater_release() -> void:
 	frames(120)
 	expect(caught and twig.point.x > held_x + 18.0 and game.scene.summer.surface_impulse > 0.0,
 		"The flood frees a trapped twig and disturbs the downstream bank (travel %.1f)" % (twig.point.x - held_x))
+
+func check_rain() -> void:
+	game.restart()
+	frames(330)
+	var without_rain := game.water.discharge_at(151.0)
+	game.toggle_rain()
+	frames(30)
+	expect(game.scene.rain.intensity > 0.0 and game.scene.rain.intensity < 0.5, "Rain builds up after the toggle")
+	frames(720)
+	var storm_discharge := game.water.discharge_at(151.0)
+	var storm_silt := game.water.silt_at(30, 8)
+	expect(storm_discharge > without_rain + 0.5 and storm_silt > 0.12 and game.scene.rain.puddles[3] > 0.5,
+		"Rain increases flow and sediment and fills low ground (discharge %.2f -> %.2f)" % [without_rain, storm_discharge])
+	var volume := game.water.volume()
+	var budget := step_grid(game.water, game.model, game.lower, 20)
+	expect(absf(game.water.volume() - volume - budget) < 0.002, "Rainfall and runoff enter the water budget")
+	game.toggle_rain()
+	frames(300)
+	expect(game.scene.rain.intensity == 0.0 and game.scene.rain.wetness > 0.40
+		and game.scene.rain.puddles[3] > 0.3 and game.water.rain_runoff > 0.1,
+		"The rain stops before the creek drains or the ground dries")
+	frames(840)
+	expect(game.water.rain_runoff < 0.13 and game.water.silt_at(30, 8) < storm_silt
+		and game.scene.rain.puddles[3] < 0.65, "Runoff, suspended sediment and puddles recede after rain")
+	game.restart()
+	expect(game.water.rain_runoff == 0.0 and game.scene.rain.wetness == 0.0
+		and game.scene.rain.drops.is_empty() and game.rain_button.text == "下雨", "Restart clears weather")

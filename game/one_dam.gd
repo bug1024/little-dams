@@ -26,12 +26,14 @@ var lower := Pool.new()
 var canvas := SubViewport.new()
 var scene := View.new()
 var gate := Button.new()
+var rain_button := Button.new()
 var creek: AudioStreamPlayer
 var music: AudioStreamPlayer
 var clack: AudioStreamPlayer
 var water_jet: AudioStreamPlayer
 var water_crest: AudioStreamPlayer
 var stone_splash: AudioStreamPlayer
+var rain_audio: AudioStreamPlayer
 var held: Pool.Piece
 var held_floater: View.Floater
 var from_bank := false
@@ -82,6 +84,10 @@ func _ready() -> void:
 		water_jet = water_cue(WaterAudio.Cue.JET)
 		water_crest = water_cue(WaterAudio.Cue.CREST)
 		stone_splash = water_cue(WaterAudio.Cue.SPLASH)
+		rain_audio = AudioStreamPlayer.new()
+		rain_audio.stream = WaterAudio.quiet_rain()
+		rain_audio.volume_db = -60.0
+		add_child(rain_audio)
 	model.released.connect(on_released.bind(false))
 	lower.released.connect(on_released.bind(true))
 	model.landed.connect(scene.support_impact)
@@ -137,11 +143,13 @@ func build_controls() -> void:
 	overlay.add_child(actions)
 	var art := Controls.new()
 	var reset := Button.new()
-	art.configure(gate, "放水", true, opening)
+	art.configure(gate, "放水", Controls.Action.RELEASE, opening)
 	gate.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
-	art.configure(reset, "重来", false, restart)
+	art.configure(reset, "重来", Controls.Action.RESTART, restart)
+	art.configure(rain_button, "下雨", Controls.Action.RAIN, toggle_rain)
 	actions.add_child(gate)
 	actions.add_child(reset)
+	actions.add_child(rain_button)
 	var group_size := actions.get_combined_minimum_size()
 	var margin := Vector2(24, 22)
 	actions.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -172,6 +180,9 @@ func restart() -> void:
 	model.reset()
 	lower.reset()
 	scene.clear()
+	rain_button.text = "下雨"
+	if rain_audio != null:
+		rain_audio.stop()
 	upper_breach.reset()
 	lower_breach.reset()
 	cancel_grab()
@@ -194,10 +205,19 @@ func restart() -> void:
 	water.rebuild_obstacles(model, lower)
 	gate.disabled = true
 
+func toggle_rain() -> void:
+	scene.rain.enabled = not scene.rain.enabled
+	rain_button.text = "停雨" if scene.rain.enabled else "下雨"
+	if scene.rain.enabled and rain_audio != null and not rain_audio.playing:
+		rain_audio.volume_db = -60.0
+		rain_audio.play()
+
 func _process(delta: float) -> void:
 	knock_cooldown = maxf(0.0, knock_cooldown - delta)
 	lag += minf(delta, 0.1)
 	while lag >= STEP:
+		scene.rain.advance(STEP)
+		water.rain_runoff = scene.rain.runoff
 		advance_gate(STEP)
 		model.settle(STEP)
 		lower.settle(STEP)
@@ -224,6 +244,10 @@ func _process(delta: float) -> void:
 	creek.pitch_scale = lerpf(creek.pitch_scale, pitch, 1.0 - exp(-delta * 2.8))
 	if water_jet != null:
 		update_seep_audio(delta, head)
+	if rain_audio != null and rain_audio.playing:
+		rain_audio.volume_db = -27.0 + linear_to_db(maxf(0.001, scene.rain.intensity))
+		if not scene.rain.enabled and scene.rain.intensity <= 0.0:
+			rain_audio.stop()
 
 func find_piece(point: Vector2) -> Pool.Piece:
 	var closest: Pool.Piece

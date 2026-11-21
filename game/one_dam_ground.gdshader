@@ -4,6 +4,8 @@ render_mode unshaded;
 #include "res://game/one_dam_daylight.gdshaderinc"
 
 uniform vec4 canopy_flutter;
+uniform float rain_wetness;
+uniform float rain_intensity;
 uniform sampler2D channel_mask : filter_nearest, repeat_disable;
 uniform sampler2D channel_profile : filter_linear, repeat_disable;
 uniform sampler2D flow_state : filter_linear, repeat_disable;
@@ -110,8 +112,11 @@ void fragment() {
 	land = mix(land, value * vec3(1.07, 1.005, 0.91), 0.18 + max(ochre * 0.40, foliage * 0.37));
 	land -= smoothstep(0.48, 0.78, value) * vec3(0.072, 0.052, 0.030);
 	float sunlit = sunlight_at(p) * smoothstep(0.26, 0.58, value) * (0.73 + patches * 0.27);
-	land += vec3(0.081, 0.071, 0.054) * sunlit;
+	land += vec3(0.081, 0.071, 0.054) * sunlit * (1.0 - rain_intensity * 0.82);
 	float leaf_shade = cast_leaf_shade(p, texel) * smoothstep(0.30, 0.58, value);
-	land *= mix(vec3(1.0), vec3(0.88, 0.91, 0.96), leaf_shade * (0.72 + sunlit * 0.28));
+	land *= mix(vec3(1.0), vec3(0.88, 0.91, 0.96), leaf_shade * (0.72 + sunlit * 0.28) * (1.0 - rain_intensity * 0.66));
+	float soaked = rain_wetness * (0.66 + patches * 0.34);
+	land *= mix(vec3(1.0), vec3(0.74, 0.81, 0.89), soaked);
+	land += vec3(0.046, 0.062, 0.059) * soaked * green * smoothstep(0.47, 0.68, value);
 	COLOR = vec4(land, 1.0);
 }

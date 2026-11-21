@@ -7,8 +7,10 @@ const Pool = preload("res://game/one_dam_water.gd")
 const RockArt = preload("res://game/one_dam_rock_art.gd")
 const Wind = preload("res://game/one_dam_wind.gd")
 const Air = preload("res://game/one_dam_air.gd")
+const Rain = preload("res://game/one_dam_rain.gd")
 const SIZE := Vector2(320, 200)
 const CHANNEL_MASK := preload("res://game/one_dam_channel.png")
+const PLATE := preload("res://game/one_dam_plate.png")
 const PAPER := Color("#f7dda2")
 const FOAM := Color("#c2f8ef")
 const LEAF_CLEARANCE := 1.45
@@ -72,6 +74,8 @@ var surface := ShaderMaterial.new()
 var ground_light := ShaderMaterial.new()
 var summer := Summer.new()
 var wind := Wind.new()
+var rain := Rain.new()
+var painted_ground := PLATE.get_image()
 var air := Air.new()
 var rock_art := RockArt.new()
 var shore_memory := PackedFloat32Array()
@@ -99,7 +103,7 @@ func _ready() -> void:
 	background.centered = false
 	background.texture_filter = TEXTURE_FILTER_NEAREST
 	background.scale = Vector2(0.5, 0.5)
-	background.texture = preload("res://game/one_dam_plate.png")
+	background.texture = PLATE
 	background.z_index = -1
 	surface.shader = preload("res://game/one_dam_surface.gdshader")
 	surface.set_shader_parameter("surge_field", surge_texture)
@@ -151,7 +155,17 @@ func on_bank(point: Vector2) -> bool:
 	var pixel := Vector2i(point / SIZE * Vector2(painted_channel.get_size()))
 	return painted_channel.get_pixelv(pixel).r < 0.5
 
+func rain_contact(point: Vector2) -> Rain.Contact:
+	if not on_bank(point) and is_wet(from_screen(point)):
+		return Rain.Contact.WATER
+	var pixel := Vector2i(point / SIZE * Vector2(painted_ground.get_size()))
+	var paint := painted_ground.get_pixelv(pixel)
+	if paint.g - paint.b > 0.065 and paint.g > paint.r * 0.89:
+		return Rain.Contact.LEAVES
+	return Rain.Contact.GROUND
+
 func clear() -> void:
+	rain.clear()
 	bank.clear()
 	rolling.clear()
 	droplets.clear()
@@ -438,6 +452,7 @@ func advance(dt: float) -> void:
 	advance_streaks(dt)
 	summer.advance(dt, water)
 	air.advance(dt)
+	rain.advance_drops(dt, self)
 	sync_surface(dt)
 	surface.set_shader_parameter("creek_time", clock)
 	surface.set_shader_parameter("upper_pool", pool_profile(model, 146.0))
@@ -449,6 +464,9 @@ func advance(dt: float) -> void:
 	surface.set_shader_parameter("wind_trail", trail)
 	surface.set_shader_parameter("wind_travel", wind.travel)
 	surface.set_shader_parameter("sun_drift", wind.sunlight)
+	ground_light.set_shader_parameter("rain_wetness", rain.wetness)
+	ground_light.set_shader_parameter("rain_intensity", rain.intensity)
+	surface.set_shader_parameter("rain_intensity", rain.intensity)
 
 	advance_rolls(dt)
 	for i in range(droplets.size() - 1, -1, -1):
@@ -476,6 +494,7 @@ func _draw() -> void:
 	draw_surge_current()
 	draw_ripples()
 	draw_shore_bubbles()
+	rain.draw_puddles(self)
 	summer.draw_land(self)
 	draw_materials()
 	draw_seams(model)
@@ -485,6 +504,7 @@ func _draw() -> void:
 	draw_froth()
 	draw_floaters()
 	summer.draw_insect(self)
+	rain.draw_drops(self)
 
 func draw_pond_edge(basin: Pool, fallback: float) -> void:
 	if basin.wall.is_empty():
