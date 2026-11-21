@@ -17,6 +17,12 @@ var head := 0
 var sample_lag := 0.0
 var rng := RandomNumberGenerator.new()
 var flutter_offset := rng.randf_range(0.0, 64.0)
+var travel := Vector4.ZERO
+var sunlight := Vector3(0.0, 0.0, 0.48)
+var sun_from := sunlight
+var sun_to := Vector3(0.036, -0.021, 0.90)
+var sun_age := 0.0
+var sun_duration := 33.0
 
 func _init() -> void:
 	history.resize(ceili(CROSSING / SAMPLE) + 2)
@@ -36,6 +42,14 @@ func advance(dt: float) -> void:
 		sample_lag -= SAMPLE
 		head = (head + 1) % history.size()
 		history[head] = current()
+	travel += (Vector4.ONE * 0.65 + trail() * 9.0) * dt
+	sun_age += dt
+	if sun_age >= sun_duration:
+		sun_age -= sun_duration
+		sun_from = sun_to
+		sun_to = Vector3(rng.randf_range(-0.048, 0.046), rng.randf_range(-0.028, 0.030), rng.randf_range(0.22, 0.93))
+		sun_duration = rng.randf_range(24.0, 46.0)
+	sunlight = sun_from.lerp(sun_to, smoothstep(0.0, 1.0, sun_age / sun_duration))
 
 func current() -> float:
 	var breath := CALM + sin(clock * 0.41) * sin(clock * 0.17) * 0.07

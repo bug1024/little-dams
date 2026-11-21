@@ -21,6 +21,7 @@ var leaf: Mote
 var leaf_turn := 0.0
 var leaf_rest := 0.0
 var leaf_due := 8.0
+var leaf_source_x := 54.0
 
 func _ready() -> void:
 	for i in 11:
@@ -62,8 +63,11 @@ func advance(dt: float) -> void:
 
 func advance_leaf(dt: float) -> void:
 	if leaf == null:
-		if clock >= leaf_due:
-			leaf = make_mote(Vector2(rng.randf_range(10.0, 130.0), rng.randf_range(20.0, 70.0)), rng.randf_range(38.0, 52.0))
+		var ready := clock >= leaf_due
+		var gust := wind.strength_at(leaf_source_x / SIZE.x)
+		if ready and (gust > 0.39 or clock >= leaf_due + 7.0):
+			var source: Vector2 = view.to_screen(Vector2(leaf_source_x, rng.randf_range(-53.0, -41.0)))
+			leaf = make_mote(source, rng.randf_range(27.0, 41.0))
 			leaf_rest = 0.0
 		return
 	if leaf.height > 0.0:
@@ -85,7 +89,8 @@ func advance_leaf(dt: float) -> void:
 
 func finish_leaf() -> void:
 	leaf = null
-	leaf_due = clock + rng.randf_range(16.0, 30.0)
+	leaf_due = clock + rng.randf_range(13.0, 27.0)
+	leaf_source_x = rng.randf_range(22.0, 126.0)
 
 func snap(point: Vector2) -> Vector2:
 	return (point * 2.0).round() * 0.5
@@ -93,9 +98,11 @@ func snap(point: Vector2) -> Vector2:
 func _draw() -> void:
 	if wind == null:
 		return
+	var light_shift := Vector2(wind.sunlight.x, wind.sunlight.y)
 	for mote in dust:
 		var p := mote.ground / SIZE
-		var light := Wind.sun_shafts(p, clock, breeze(mote.ground)) * (0.5 + 0.5 * sin(clock * 3.0 + mote.phase))
+		var light := Wind.sun_shafts(p - light_shift, clock, breeze(mote.ground)) * wind.sunlight.z
+		light *= 0.5 + 0.5 * sin(clock * 3.0 + mote.phase)
 		if light > 0.05:
 			draw_rect(Rect2(snap(mote.ground), Vector2(0.5, 0.5)), Color(1.0, 0.92, 0.70, minf(0.85, light * 1.1)))
 	draw_gnats()

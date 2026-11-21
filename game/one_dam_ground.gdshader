@@ -21,6 +21,10 @@ float branch_sway(vec2 p) {
 		mix(canopy_flutter.z, canopy_flutter.w, branch), tip);
 }
 
+float foliage_color(vec3 color) {
+	return smoothstep(0.010, 0.074, color.g - color.r * 0.85) * smoothstep(0.024, 0.124, color.g - color.b);
+}
+
 float cast_leaf_shade(vec2 p, vec2 texel) {
 	// Only the small branch tips at the existing tree-shadow edge cast moving shade.
 	float fringe_mask = fringe(p, vec2(0.32, 0.14), vec2(0.24, 0.16));
@@ -41,21 +45,28 @@ void fragment() {
 	vec2 p = (floor(UV / texel) + 0.5) * texel;
 	vec3 art = texture(TEXTURE, p).rgb;
 
-	// Only foliage already painted in these areas can be displaced.
-	float green = smoothstep(0.012, 0.080, art.g - art.r * 0.83) * smoothstep(0.026, 0.14, art.g - art.b);
-	float hanging = fringe(p, vec2(0.153, 0.122), vec2(0.17, 0.13));
-	float fern = fringe(p, vec2(0.464, 0.305), vec2(0.07, 0.055));
-	float reeds = fringe(p, vec2(0.047, 0.728), vec2(0.072, 0.1));
+	// Paint regions identify movable crowns and tips. Sample only other plant pixels in those regions.
+	float green = foliage_color(art);
+	float hanging = fringe(p, vec2(0.162, 0.089), vec2(0.245, 0.142));
+	float upper_growth = max(fringe(p, vec2(0.42, 0.17), vec2(0.087, 0.086)),
+		fringe(p, vec2(0.72, 0.16), vec2(0.11, 0.11)));
+	float reeds = fringe(p, vec2(0.055, 0.82), vec2(0.115, 0.19));
+	float near_bank = max(fringe(p, vec2(0.709, 0.843), vec2(0.125, 0.129)),
+		fringe(p, vec2(0.88, 0.659), vec2(0.086, 0.118)));
+	float mid_bank = fringe(p, vec2(0.464, 0.306), vec2(0.087, 0.063));
 	float gust = wind_at(p.x);
 	float flutter = 0.80 + gust * 0.75;
 	float movement = hanging * branch_sway(p);
-	movement += fern * branch_sway(p + vec2(0.12, 0.04));
-	movement += reeds * branch_sway(p + vec2(0.24, 0.03));
-	float lean = gust * (0.20 + hanging * 0.87 + fern * 0.58 + reeds * 0.98);
+	movement += max(upper_growth, mid_bank) * branch_sway(p + vec2(0.12, 0.04));
+	movement += max(reeds, near_bank) * branch_sway(p + vec2(0.24, 0.03)) * 1.28;
+	float lean = gust * (0.20 + hanging * 0.78 + max(upper_growth, mid_bank) * 0.57 + max(reeds, near_bank) * 1.10);
 	// Sampling against the gust shifts the painted leaves downwind.
 	vec2 displacement = -movement * flutter * vec2(2.7, -0.85) - lean * vec2(1.8, 0.72);
 	vec2 moved = p + round(displacement * green) * texel;
-	art = texture(TEXTURE, moved).rgb;
+	vec3 tip = texture(TEXTURE, moved).rgb;
+	if (foliage_color(tip) > 0.12) {
+		art = tip;
+	}
 	// The forest recedes away from the creek while the interactive layer stays crisp.
 	float distance_to_creek = abs(p.y - (0.55 - p.x * 0.17));
 	float far_bank = smoothstep(0.18, 0.48, distance_to_creek);
@@ -98,10 +109,8 @@ void fragment() {
 	float foliage = smoothstep(0.035, 0.19, land.g - land.b) * smoothstep(-0.04, 0.065, land.g - land.r);
 	land = mix(land, value * vec3(1.07, 1.005, 0.91), 0.18 + max(ochre * 0.40, foliage * 0.37));
 	land -= smoothstep(0.48, 0.78, value) * vec3(0.072, 0.052, 0.030);
-	float sun = max(fringe(p, vec2(0.71, 0.16), vec2(0.43, 0.23)),
-		fringe(p, vec2(0.58, 0.82), vec2(0.44, 0.23)) * 0.72);
-	float sunlit = sun * smoothstep(0.30, 0.59, value) * (0.79 + patches * 0.21);
-	land += vec3(0.067, 0.059, 0.045) * sunlit;
+	float sunlit = sunlight_at(p) * smoothstep(0.26, 0.58, value) * (0.73 + patches * 0.27);
+	land += vec3(0.081, 0.071, 0.054) * sunlit;
 	float leaf_shade = cast_leaf_shade(p, texel) * smoothstep(0.30, 0.58, value);
 	land *= mix(vec3(1.0), vec3(0.88, 0.91, 0.96), leaf_shade * (0.72 + sunlit * 0.28));
 	COLOR = vec4(land, 1.0);

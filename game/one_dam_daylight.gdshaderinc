@@ -1,4 +1,5 @@
 uniform vec4 wind_trail = vec4(0.16);
+uniform vec3 sun_drift = vec3(0.0, 0.0, 0.48);
 
 float earth_patch(vec2 p) {
 	vec2 tile = floor(p);
@@ -10,11 +11,22 @@ float earth_patch(vec2 p) {
 }
 
 // Gust strength at a horizontal position; gusts reach the right edge later than the left.
-float wind_at(float x) {
+float downwind_sample(vec4 samples, float x) {
 	float s = clamp(x, 0.0, 1.0) * 3.0;
-	float a = s < 1.0 ? wind_trail.x : (s < 2.0 ? wind_trail.y : wind_trail.z);
-	float b = s < 1.0 ? wind_trail.y : (s < 2.0 ? wind_trail.z : wind_trail.w);
-	return mix(a, b, fract(min(s, 2.999)));
+	float a = s < 1.0 ? samples.x : (s < 2.0 ? samples.y : samples.z);
+	float b = s < 1.0 ? samples.y : (s < 2.0 ? samples.z : samples.w);
+	return mix(a, b, s - min(floor(s), 2.0));
+}
+
+float wind_at(float x) {
+	return downwind_sample(wind_trail, x);
+}
+
+float sunlight_at(vec2 p) {
+	vec2 gap = p - sun_drift.xy;
+	float upper = 1.0 - smoothstep(0.37, 1.0, length((gap - vec2(0.71, 0.20)) / vec2(0.45, 0.32)));
+	float lower = 1.0 - smoothstep(0.31, 1.0, length((gap - vec2(0.59, 0.82)) / vec2(0.46, 0.32)));
+	return max(upper, lower * 0.81) * (0.62 + sun_drift.z * 0.38);
 }
 
 // Trees just outside the frame: a large crown over the upper left, a smaller one at the lower right.

@@ -122,6 +122,8 @@ func _ready() -> void:
 	add_child(background)
 
 	summer.wind = wind
+	summer.fish_surface.connect(func(point: Vector2) -> void:
+		ripples.append(Vector4(point.x, point.y, 0.0, 0.23)))
 	air.wind = wind
 	air.view = self
 	air.z_index = 2
@@ -443,7 +445,10 @@ func advance(dt: float) -> void:
 	var trail := wind.trail()
 	ground_light.set_shader_parameter("wind_trail", trail)
 	ground_light.set_shader_parameter("canopy_flutter", wind.canopy_flutter())
+	ground_light.set_shader_parameter("sun_drift", wind.sunlight)
 	surface.set_shader_parameter("wind_trail", trail)
+	surface.set_shader_parameter("wind_travel", wind.travel)
+	surface.set_shader_parameter("sun_drift", wind.sunlight)
 
 	advance_rolls(dt)
 	for i in range(droplets.size() - 1, -1, -1):

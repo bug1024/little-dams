@@ -2,6 +2,7 @@ extends RefCounted
 
 const Flow = preload("res://game/one_dam_grid.gd")
 const Wind = preload("res://game/one_dam_wind.gd")
+signal fish_surface(point: Vector2)
 
 const SEDGES := [
 	Vector3(25, 120, 7.5), Vector3(23, 122, 3.4), Vector3(28, 124, 4.7),
@@ -13,6 +14,8 @@ enum Flight { PERCHED, FLYING, HOVERING, LANDING }
 
 # The ends of three sedge stems are the insect's places to rest.
 const PERCHES := [0, 3, 5]
+const FISH_SHELTERS := [Vector2(61, 5), Vector2(83, -4), Vector2(111, 5),
+	Vector2(137, -9), Vector2(184, 6), Vector2(221, -5), Vector2(264, 4)]
 
 var clock := 0.0
 var fish := Vector2.ZERO
@@ -20,6 +23,8 @@ var fish_time := -1.0
 var fish_due := 7.8
 var fish_alarm := 0.0
 var fish_heading := Vector2.LEFT
+var fish_turn_due := 0.0
+var fish_surface_due := 0.0
 var insect_state := Flight.PERCHED
 var insect_age := 0.0
 var insect_duration := 5.4
@@ -58,7 +63,9 @@ func advance_insect(dt: float) -> void:
 	match insect_state:
 		Flight.PERCHED:
 			insect_position = plant_tip(PERCHES[perch], 2)
-			if t >= 1.0:
+			var exposed := wind != null and wind.strength_at(insect_position.x / 320.0) > 0.73
+			var flooded := surface_impulse > 0.60 and absf(insect_position.x - impulse_x) < 37.0
+			if t >= 1.0 or (insect_age > 2.2 and (exposed or flooded)):
 				take_flight()
 		Flight.FLYING:
 			insect_position = flight_origin.lerp(hover_point, smooth)
@@ -109,22 +116,36 @@ func advance_fish(dt: float, water: Flow) -> void:
 		var velocity := water.velocity_at(fish)
 		if velocity.length() > 36.0 and fish_alarm < 0.15:
 			fish_alarm = 0.75
-		var stride := fish_heading * (11.0 + fish_alarm * 37.0) + Vector2(0, sin(fish_time * 2.6) * 4.0)
+		elif fish_alarm < 0.14 and fish_time >= fish_turn_due:
+			fish_turn_due = fish_time + rng.randf_range(0.55, 1.4)
+			fish_heading = fish_heading.rotated(rng.randf_range(-0.45, 0.45))
+		var stride := fish_heading * (11.0 + fish_alarm * 37.0) + velocity.limit_length(16.0) * 0.15
 		var next := fish + stride * dt
 		if water.depth_at(next) < 0.13 or absf(next.y) > 30.0:
-			fish_heading = Vector2(-0.9, -signf(fish.y) * 0.52).normalized()
+			var toward_channel := Vector2(fish_heading.x, -signf(fish.y) * 0.72).normalized()
+			var check := fish + toward_channel * 2.0
+			fish_heading = toward_channel if water.depth_at(check) >= 0.13 else -fish_heading
 		else:
 			fish = next
+		if fish_time >= fish_surface_due and fish_time < 3.8 and fish_alarm < 0.12 and velocity.length() < 20.0:
+			var depth := water.depth_at(fish)
+			if depth > 0.15 and depth < 0.42:
+				fish_surface.emit(fish)
+				fish_surface_due = INF
 		if fish_time >= 5.0 or fish.x < 8.0 or fish.x > 314.0:
-			fish_due = clock + rng.randf_range(12.0, 25.0)
+			fish_due = clock + rng.randf_range(8.0, 20.0)
 			fish_time = -1.0
 	elif clock >= fish_due:
-		for start in [Vector2(111, 5), Vector2(101, -6), Vector2(83, 0), Vector2(206, 7)]:
-			if water.depth_at(start) > 0.19 and water.velocity_at(start).length() < 25.0:
+		var offset := rng.randi_range(0, FISH_SHELTERS.size() - 1)
+		for i in FISH_SHELTERS.size():
+			var start: Vector2 = FISH_SHELTERS[(i + offset) % FISH_SHELTERS.size()]
+			if water.depth_at(start) > 0.16 and water.velocity_at(start).length() < 25.0:
 				fish = start
 				fish_time = 0.0
 				fish_alarm = 0.0
-				fish_heading = Vector2.LEFT
+				fish_turn_due = rng.randf_range(0.4, 1.1)
+				fish_surface_due = rng.randf_range(1.1, 3.0)
+				fish_heading = Vector2.LEFT if rng.randf() < 0.64 else Vector2.RIGHT
 				return
 		fish_due = clock + 5.0
 
@@ -135,7 +156,7 @@ func draw_fish(canvas: Node2D, project: Callable) -> void:
 	var presence := smoothstep(0.0, 0.7, fish_time) * (1.0 - smoothstep(3.0, 4.8, fish_time))
 	var tail := sin(fish_time * (12.0 + fish_alarm * 17.0)) * (1.2 + fish_alarm)
 	var turn := fish_heading.angle() - PI
-	var shadow := Color(0.08, 0.18, 0.18, presence * 0.49)
+	var shadow := Color(0.08, 0.18, 0.18, presence * 0.58)
 	canvas.draw_colored_polygon(PackedVector2Array([
 		position + Vector2(-4.1, 0.1).rotated(turn), position + Vector2(-1.5, -1.35).rotated(turn),
 		position + Vector2(2.1, -0.75).rotated(turn), position + Vector2(5.2, tail - 0.8).rotated(turn),
