@@ -65,9 +65,9 @@ func cell_at(point: Vector2) -> Vector2i:
 func cell_point(x: int, y: int) -> Vector2:
 	return Vector2((x + 0.5) * DX, row_y(y))
 
-func reset(dam_x: float, filled := true) -> void:
+func reset(dam_x: float, filled := true, stored_depth := 0.83) -> void:
 	var dam := cell_at(Vector2(dam_x, 0))
-	var pool_level := bed[index(dam.x, dam.y)] + 0.83
+	var pool_level := bed[index(dam.x, dam.y)] + stored_depth
 	for y in ROWS:
 		var cross := pow(absf(row_y(y)) / BANK, 1.9)
 		for x in COLUMNS:
@@ -110,6 +110,9 @@ func stamp_piece(piece: Materials.Piece) -> void:
 			var south_shape := Vector2(offset.x / width, (offset.y + DY * 0.5) / span)
 			var east_cover := clampf((1.19 - east_shape.length()) * 3.0, 0.0, 1.0)
 			var south_cover := clampf((1.19 - south_shape.length()) * 3.0, 0.0, 1.0)
+			if piece.notch > 0.0:
+				var throat := 1.0 - smoothstep(DY * 0.34, maxf(DY * 0.72, span * piece.notch), absf(offset.y))
+				east_cover *= 1.0 - throat * minf(0.98, piece.notch * 1.75)
 			crest_x[i] = maxf(crest_x[i], height * east_cover)
 			crest_y[i] = maxf(crest_y[i], height * south_cover)
 			pass_x[i] = minf(pass_x[i], lerpf(1.0, permeability, east_cover))
@@ -208,7 +211,10 @@ func discharge_at(x: float) -> float:
 	return discharge
 
 func pool_head(x: float) -> float:
-	var center := cell_at(Vector2(x - 15.0, 0.0)).x
+	return channel_depth(x - 15.0)
+
+func channel_depth(x: float) -> float:
+	var center := cell_at(Vector2(x, 0.0)).x
 	var average := 0.0
 	for y in range(5, 12):
 		average += depth[index(center, y)]
@@ -234,6 +240,14 @@ func gap_flow(point: Vector2) -> float:
 		result += maxf(0.0, east[index(cell.x, y)])
 	return result
 
+func gap_width(point: Vector2) -> float:
+	var cell := cell_at(point + Vector2(DX, 0.0))
+	var center := maxf(0.08, east[index(cell.x, cell.y)])
+	var width := 0.0
+	for y in range(maxi(0, cell.y - 3), mini(ROWS, cell.y + 4)):
+		width += smoothstep(0.07, center * 0.75 + 0.075, east[index(cell.x, y)])
+	return clampf(width * DY, 1.0, 19.0)
+
 func erosion_load(piece: Materials.Piece) -> float:
 	var radius := piece.radius
 	var point := piece.point
@@ -257,7 +271,8 @@ func erode(dt: float, basin: Materials) -> void:
 		var wet_layer := 1.0 if piece.support == null else smoothstep(0.35, 0.70, depth_at(piece.point - Vector2(5.0, 0.0)))
 		var load := erosion_load(piece) * wet_layer
 		var excess := maxf(0.0, load - threshold)
-		var loss := excess * dt * erosion_gain * (0.047 if soil else 0.021)
+		var resistance := lerpf(1.28, 0.66, smoothstep(5.0, 15.0, piece.radius))
+		var loss := excess * dt * erosion_gain * (0.047 if soil else 0.021 * resistance)
 		piece.wear = minf(1.0, piece.wear + loss)
 		if soil and loss > 0.0:
 			cloud(piece.point, loss * 1.7)

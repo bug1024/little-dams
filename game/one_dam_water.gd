@@ -1,6 +1,7 @@
 extends RefCounted
 
 signal released(piece: Piece, strength: float)
+signal landed(piece: Piece, speed: float)
 
 const STONE := 0
 const EARTH := 1
@@ -12,6 +13,7 @@ class Piece:
 	var kind: int
 	var shade: int
 	var wear := 0.0
+	var notch := 0.0
 	var support: Piece
 	var visible_lift := 0.0
 	var fall_speed := 0.0
@@ -47,7 +49,10 @@ func reset() -> void:
 
 func settle(dt: float) -> void:
 	for piece in wall:
+		var was_falling := piece.visible_lift > piece.lift()
 		piece.settle(dt)
+		if was_falling and piece.visible_lift <= piece.lift():
+			landed.emit(piece, piece.fall_speed)
 
 func remove(piece: Piece, force: float) -> void:
 	if not wall.has(piece):
@@ -102,6 +107,7 @@ func can_place(piece: Piece, point: Vector2, support: Piece) -> bool:
 func place(piece: Piece, point: Vector2, support: Piece) -> void:
 	piece.point = point
 	piece.wear = 0.0
+	piece.notch = 0.0
 	piece.support = support
 	piece.visible_lift = piece.lift()
 	piece.fall_speed = 0.0

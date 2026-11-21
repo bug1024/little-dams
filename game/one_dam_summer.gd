@@ -1,6 +1,7 @@
 extends RefCounted
 
 const Flow = preload("res://game/one_dam_grid.gd")
+const Wind = preload("res://game/one_dam_wind.gd")
 
 const SEDGES := [
 	Vector3(25, 120, 7.5), Vector3(23, 122, 3.4), Vector3(28, 124, 4.7),
@@ -30,6 +31,7 @@ var hover_point := Vector2.ZERO
 var surface_impulse := 0.0
 var impulse_x := 0.0
 var rng := RandomNumberGenerator.new()
+var wind: Wind
 
 func advance(dt: float, water: Flow) -> void:
 	clock += dt
@@ -39,9 +41,11 @@ func advance(dt: float, water: Flow) -> void:
 
 func plant_sway(index: int, stem: int) -> float:
 	var root: Vector3 = SEDGES[index]
-	var gust := smoothstep(0.68, 0.98, sin(clock * 0.20 + index * 0.76))
+	var gust := wind.strength_at(root.x / 320.0) if wind != null else Wind.CALM
+	var rustle := wind.flutter(4 + index * 4 + stem) if wind != null else 0.0
 	var flood := surface_impulse * maxf(0.0, 1.0 - absf(root.x - impulse_x) / 105.0)
-	return sin(clock * (0.77 + index * 0.11) + index * 2.6 + stem * 0.37) * (0.61 + gust * 1.65) + flood * 2.7
+	var lean := gust * (0.95 + stem * 0.23)
+	return rustle * (1.10 + gust * 1.40) * (root.z / 7.5) + lean + flood * 2.7
 
 func plant_tip(index: int, stem: int) -> Vector2:
 	var root: Vector3 = SEDGES[index]
@@ -148,13 +152,18 @@ func draw_land(canvas: Node2D) -> void:
 			var span := (stem - 1.4) * 2.0
 			var height := data.z * (0.73 + stem % 3 * 0.16)
 			var sway := plant_sway(i, stem)
-			var split := root + Vector2(span * 0.37, -height * 0.54)
+			var split := root + Vector2(span * 0.37 + sway * 0.19, -height * 0.54)
 			var tip := plant_tip(i, stem)
 			var ink := Color("#596332") if stem % 2 == 0 else Color("#7a7b42")
 			canvas.draw_line(root, split, Color("#454c2d"), 0.5)
 			canvas.draw_line(split, tip, ink, 0.5)
 			var blade := split.lerp(tip, 0.53)
 			canvas.draw_line(blade, blade + Vector2(1.0 + sway * 0.6, -1.1), ink.lightened(0.11), 0.5)
+			if data.z >= 5.0 and stem == (3 if i % 2 == 0 else 1):
+				var axis := (tip - split).normalized()
+				var seed_head := tip + axis * 1.4
+				canvas.draw_line(tip, seed_head, Color("#8b874b"), 1.5)
+				canvas.draw_line(tip + Vector2(-0.5, 0), seed_head + Vector2(-0.5, -0.5), Color("#b5a26a"), 0.5)
 
 	for leaf in [Vector3(58, 155, -0.7), Vector3(60.5, 154, 0.6), Vector3(59, 157, 2.9),
 			Vector3(187, 151, 0.4), Vector3(196, 46, -1.7), Vector3(109, 169, 2.8)]:

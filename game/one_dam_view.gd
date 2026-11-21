@@ -5,10 +5,14 @@ const Breach = preload("res://game/one_dam_breach.gd")
 const Summer = preload("res://game/one_dam_summer.gd")
 const Pool = preload("res://game/one_dam_water.gd")
 const RockArt = preload("res://game/one_dam_rock_art.gd")
+const Wind = preload("res://game/one_dam_wind.gd")
+const Air = preload("res://game/one_dam_air.gd")
 const SAFE_BANK := Rect2(35, 15, 275, 162)
 const SIZE := Vector2(320, 200)
 const PAPER := Color("#f7dda2")
 const FOAM := Color("#c2f8ef")
+const LEAF_CLEARANCE := 1.45
+signal stone_splash(mass: float, strength: float)
 # Centers and half widths traced from the near-view shoreline at sixteen-pixel intervals.
 const CHANNEL_Y := [89.2, 94.6, 100.3, 108.1, 111.5, 118.2, 117.9, 113.7, 117.0, 114.7, 112.4, 109.2, 105.0, 100.9, 96.8, 89.9, 84.3, 78.0, 72.1, 68.8, 66.0]
 const CHANNEL_RADIUS := [19.8, 19.8, 22.4, 24.1, 22.1, 23.6, 24.9, 26.5, 30.6, 31.7, 32.8, 31.4, 26.0, 25.6, 27.7, 23.1, 24.4, 23.2, 20.8, 21.3, 22.2]
@@ -30,6 +34,17 @@ class Floater:
 		twig = is_twig
 		angle = turn
 
+class RollingPiece:
+	var piece: Pool.Piece
+	var point: Vector2
+	var velocity: Vector2
+	var age := 0.0
+	var lift := 0.0
+	var fall := 0.0
+	var turn := 0.0
+	var impact := false
+	var force := 0.0
+
 var water: Flow
 var model: Pool
 var lower: Pool
@@ -37,7 +52,7 @@ var upper_breach: Breach
 var lower_breach: Breach
 var foam_strength := 1.0
 var bank: Array[Pool.Piece] = []
-var rolling: Array[Dictionary] = []
+var rolling: Array[RollingPiece] = []
 var riffle: Array[Pool.Piece] = []
 var floaters: Array[Floater] = []
 var held_floater: Floater
@@ -57,6 +72,8 @@ var flow_texture := ImageTexture.create_from_image(water_pixels)
 var surface := ShaderMaterial.new()
 var ground_light := ShaderMaterial.new()
 var summer := Summer.new()
+var wind := Wind.new()
+var air := Air.new()
 var rock_art := RockArt.new()
 var shore_memory := PackedFloat32Array()
 var bed_deposit := PackedFloat32Array()
@@ -64,10 +81,19 @@ var surface_travel := PackedVector2Array()
 var shore_image := Image.create_empty(Flow.COLUMNS, Flow.ROWS, false, Image.FORMAT_RGBAF)
 var shore_texture := ImageTexture.create_from_image(shore_image)
 var leaf_due := 6.4
+var release_time := 0.0
+var release_start := 0.0
+var quiet_flow := PackedFloat32Array()
+var surge_field := PackedFloat32Array()
+var surge_image := Image.create_empty(Flow.COLUMNS, 1, false, Image.FORMAT_RF)
+var surge_texture := ImageTexture.create_from_image(surge_image)
+var last_crest_x := -1.0
 
 func _ready() -> void:
 	shore_memory.resize(Flow.COUNT)
 	bed_deposit.resize(Flow.COUNT)
+	quiet_flow.resize(Flow.COLUMNS)
+	surge_field.resize(Flow.COLUMNS)
 	surface_travel.resize(Flow.COUNT)
 	var background := Sprite2D.new()
 	background.centered = false
@@ -76,6 +102,7 @@ func _ready() -> void:
 	background.texture = preload("res://game/one_dam_plate.png")
 	background.z_index = -1
 	surface.shader = preload("res://game/one_dam_surface.gdshader")
+	surface.set_shader_parameter("surge_field", surge_texture)
 	ground_light.shader = preload("res://game/one_dam_ground.gdshader")
 	var channel_profile := Image.create_empty(160, 1, false, Image.FORMAT_RGF)
 	for i in channel_profile.get_width():
@@ -93,6 +120,12 @@ func _ready() -> void:
 	add_child(ground)
 	background.material = surface
 	add_child(background)
+
+	summer.wind = wind
+	air.wind = wind
+	air.view = self
+	air.z_index = 2
+	add_child(air)
 
 func shoreline(samples: Array, x: float) -> float:
 	var along := clampf(x / 16.0, 0.0, samples.size() - 1.0)
@@ -117,6 +150,9 @@ func clear() -> void:
 	ripples.clear()
 	shore_memory.fill(0.0)
 	bed_deposit.fill(0.0)
+	surge_field.fill(0.0)
+	release_time = 0.0
+	last_crest_x = -1.0
 	surface_travel.fill(Vector2.ZERO)
 	leaf_due = clock + 6.4
 	riffle.clear()
@@ -151,15 +187,70 @@ func material_touch(point: Vector2, mud: bool) -> void:
 		summer.disturb_water(point, 0.62, false)
 
 func launch(piece: Pool.Piece, strength: float) -> void:
-	rolling.append({"piece": piece, "origin": piece.point, "age": 0.0, "force": strength})
-	var wet := water.depth_at(piece.point + Vector2(4.0, 0.0))
-	if wet > 0.06:
-		burst(piece.point, clampf(strength * wet, 0.15, 1.0))
+	var mass := smoothstep(5.0, 15.0, piece.radius)
+	var flow := water.velocity_at(piece.point + Vector2(5, 0)).limit_length(70.0)
+	var rock := RollingPiece.new()
+	rock.piece = piece
+	rock.point = piece.point
+	rock.velocity = (flow * 0.64 + Vector2(9.0 + strength * 11.0, 0.0)) * lerpf(1.10, 0.42, mass)
+	rock.lift = piece.visible_lift + lerpf(4.5, 2.0, mass)
+	rock.force = strength
+	rolling.append(rock)
+	if piece.kind == Pool.EARTH:
+		water.cloud(piece.point, 0.25)
 
 func wave_impact(point: Vector2, strength: float) -> void:
 	summer.disturb_water(point, strength, true)
-	shake_time = 0.16
+	nudge_camera(0.16)
 	burst(point + Vector2(7.0, 0.0), strength)
+
+func nudge_camera(duration: float) -> void:
+	shake_time = maxf(shake_time, duration)
+
+func track_release(origin_x: float, refresh := false) -> void:
+	if refresh or release_time <= 0.0:
+		for x in Flow.COLUMNS:
+			quiet_flow[x] = water.discharge_at((x + 0.5) * Flow.DX)
+		last_crest_x = -1.0
+		release_start = origin_x
+	else:
+		release_start = minf(release_start, origin_x)
+	release_time = 6.5
+
+func advance_surge(dt: float) -> void:
+	release_time = maxf(0.0, release_time - dt)
+	var crest_x := -1.0
+	for x in Flow.COLUMNS:
+		var at := (x + 0.5) * Flow.DX
+		var gain := water.discharge_at(at) - quiet_flow[x]
+		var push := smoothstep(0.10, 0.53, gain) if release_time > 0.0 and at >= release_start - Flow.DX else 0.0
+		surge_field[x] = lerpf(surge_field[x], push, 1.0 - exp(-dt * (13.0 if push > surge_field[x] else 2.8)))
+		surge_image.set_pixel(x, 0, Color(surge_field[x], 0.0, 0.0))
+		if at < SIZE.x - 12.0 and surge_field[x] > 0.28:
+			crest_x = at
+	surge_texture.update(surge_image)
+	if crest_x > 0.0 and (last_crest_x < 0.0 or crest_x > last_crest_x + 26.0):
+		last_crest_x = crest_x
+		var at := Vector2(crest_x, 0.0)
+		summer.disturb_water(at, 0.72, true)
+		if crest_x > release_start + 27.0 and is_wet(at):
+			ripples.append(Vector4(crest_x, 0.0, 0.0, 0.43))
+
+func surge_at(x: float) -> float:
+	return surge_field[clampi(floori(x / Flow.DX), 0, Flow.COLUMNS - 1)]
+
+func support_impact(piece: Pool.Piece, speed: float) -> void:
+	if not is_wet(piece.point):
+		return
+	var mass := smoothstep(5.0, 15.0, piece.radius)
+	var strength := clampf(speed * (0.012 + mass * 0.012), 0.15, 1.15)
+	burst(piece.point, strength)
+	water.cloud(piece.point, strength * 0.16)
+	summer.disturb_water(piece.point, strength, false)
+	if strength > 0.70:
+		nudge_camera(0.12)
+	if piece.kind == Pool.STONE:
+		stone_splash.emit(mass, strength)
 
 func shake_offset() -> Vector2:
 	if shake_time <= 0.0:
@@ -178,10 +269,65 @@ func advance_riffle(dt: float) -> void:
 		if stone.wear >= 1.0:
 			riffle.remove_at(i)
 			launch(stone, 1.1)
-			wave_impact(stone.point, 0.9)
+
+func advance_rolls(dt: float) -> void:
+	for i in range(rolling.size() - 1, -1, -1):
+		var rock := rolling[i]
+		var piece: Pool.Piece = rock.piece
+		var mass := smoothstep(5.0, 15.0, piece.radius)
+		var at: Vector2 = rock.point
+		var velocity: Vector2 = rock.velocity
+		rock.age += dt
+		var contact := rock.lift <= 0.0
+		var current := water.velocity_at(at).limit_length(65.0) if is_wet(at) else Vector2.ZERO
+		var drag := lerpf(0.50, 0.20, mass) * exp(-rock.age * 0.8)
+		velocity = velocity.lerp(current * drag, 1.0 - exp(-dt * (3.8 if contact else 1.1)))
+		var next := at + velocity * dt
+		if next.x > 5.0 and next.x < SIZE.x - 7.0 and absf(next.y) <= Pool.BANK + 13.0 and (
+				not blocked_at(model, next, 0.2) and not blocked_at(lower, next, 0.2)
+				or blocked_at(model, at, 0.2) or blocked_at(lower, at, 0.2)):
+			rock.point = next
+		else:
+			velocity *= 0.16
+		rock.velocity = velocity
+		rock.turn += velocity.length() * dt / maxf(piece.radius * 0.8, 2.0)
+		rock.fall += dt * 96.0
+		rock.lift = maxf(0.0, rock.lift - rock.fall * dt)
+		if not rock.impact and rock.lift <= 0.0:
+			rock.impact = true
+			if is_wet(rock.point):
+				var strength := clampf(rock.force * lerpf(0.34, 0.69, mass), 0.17, 1.23)
+				burst(rock.point, strength)
+				water.cloud(rock.point, strength * (0.31 if piece.kind == Pool.EARTH else 0.18))
+				if piece.kind == Pool.STONE:
+					stone_splash.emit(mass, strength)
+					summer.disturb_water(rock.point, strength, false)
+					if mass > 0.55 and strength > 0.54:
+						nudge_camera(0.12)
+		if rock.age >= 1.45 or (rock.age > 0.50 and velocity.length() < 2.5):
+			piece.point = rock.point
+			piece.visible_lift = 0.0
+			piece.notch = 0.0
+			piece.wear = 0.0
+			if not is_wet(piece.point):
+				bank.append(piece)
+			elif piece.kind == Pool.STONE:
+				riffle.append(piece)
+			rolling.remove_at(i)
 
 func is_wet(at: Vector2) -> bool:
 	return absf(at.y) <= Pool.BANK and water.depth_at(at) > 0.046
+
+func settle_leaf(screen: Vector2, turn: float) -> bool:
+	var target := from_screen(screen)
+	if not Rect2(Vector2.ZERO, SIZE).has_point(screen) or not can_float_at(target, LEAF_CLEARANCE):
+		return false
+	var leaf := Floater.new(target, false, turn)
+	leaf.afloat = true
+	leaf.ambient = true
+	floaters.append(leaf)
+	ripples.append(Vector4(target.x, target.y, 0.0, 0.18))
+	return true
 
 func floater_at(cursor: Vector2) -> Floater:
 	for item in floaters:
@@ -197,18 +343,22 @@ func blocked_at(basin: Pool, at: Vector2, clearance: float) -> bool:
 				return true
 	return false
 
+func can_float_at(point: Vector2, clearance: float) -> bool:
+	return is_wet(point) and not blocked_at(model, point, clearance) and not blocked_at(lower, point, clearance)
+
 func clear_float_path(start: Vector2, end: Vector2, clearance: float) -> bool:
 	for i in range(1, 4):
 		var point := start.lerp(end, i / 3.0)
-		if not is_wet(point) or blocked_at(model, point, clearance) or blocked_at(lower, point, clearance):
+		if not can_float_at(point, clearance):
 			return false
 	return true
 
 func drift_floater(item: Floater, step: float) -> void:
 	var flow := water.velocity_at(item.point).limit_length(72.0)
-	var response := (5.5 if item.twig else 8.0)
+	flow += Wind.DIRECTION * wind.strength_at(item.point.x / SIZE.x) * (2.0 if item.twig else 3.5)
+	var response := (5.5 if item.twig else 8.0) * (1.0 + surge_at(item.point.x) * 0.65)
 	item.drift = item.drift.lerp(flow, 1.0 - exp(-step * response))
-	var clearance := 3.8 if item.twig else 1.45
+	var clearance := 3.8 if item.twig else LEAF_CLEARANCE
 	var delta := item.drift * step
 	var target := item.point + delta
 	var touching := not clear_float_path(item.point, target, clearance)
@@ -291,25 +441,23 @@ func sync_surface(dt: float) -> void:
 func advance(dt: float) -> void:
 	clock += dt
 	shake_time = maxf(0.0, shake_time - dt)
+	wind.advance(dt)
+	advance_surge(dt)
 	advance_riffle(dt)
 	advance_floaters(dt)
 	advance_streaks(dt)
 	summer.advance(dt, water)
+	air.advance(dt)
 	sync_surface(dt)
 	surface.set_shader_parameter("creek_time", clock)
-	ground_light.set_shader_parameter("afternoon_time", clock)
+	surface.set_shader_parameter("upper_pool", pool_profile(model, 146.0))
+	surface.set_shader_parameter("lower_pool", pool_profile(lower, 262.0))
+	var trail := wind.trail()
+	ground_light.set_shader_parameter("wind_trail", trail)
+	ground_light.set_shader_parameter("canopy_flutter", wind.canopy_flutter())
+	surface.set_shader_parameter("wind_trail", trail)
 
-	for i in range(rolling.size() - 1, -1, -1):
-		var item := rolling[i]
-		item.age += dt
-		if item.age >= 1.78:
-			var piece: Pool.Piece = item.piece
-			var shore := 51.0 if int(piece.shade) % 2 == 0 else -51.0
-			var x := clampf(item.origin.x + 50 + piece.shade * 18, 60, 272)
-			piece.point = Vector2(x, shore + cos(x) * 5.0)
-			piece.wear = 0.0
-			bank.append(piece)
-			rolling.remove_at(i)
+	advance_rolls(dt)
 	for i in range(droplets.size() - 1, -1, -1):
 		droplets[i].z += dt
 		if droplets[i].z >= 0.7:
@@ -319,6 +467,11 @@ func advance(dt: float) -> void:
 		if ripples[i].z > 1.85:
 			ripples.remove_at(i)
 	queue_redraw()
+
+func pool_profile(basin: Pool, fallback: float) -> Vector2:
+	var center := basin.center(fallback)
+	var head := maxf(0.0, water.pool_head(center) - water.channel_depth(center + 19.0))
+	return Vector2(center / SIZE.x, head if not basin.wall.is_empty() else 0.0)
 
 func _draw() -> void:
 	if water == null:
@@ -343,8 +496,8 @@ func draw_pond_edge(basin: Pool, fallback: float) -> void:
 	if basin.wall.is_empty():
 		return
 	var lip := basin.center(fallback) - 9.0
-	var head := water.pool_head(lip + 9.0)
-	var height := smoothstep(0.24, 1.0, head)
+	var head := pool_profile(basin, fallback).y
+	var height := smoothstep(0.08, 0.65, head)
 	if height < 0.02:
 		return
 	for side in [-1, 1]:
@@ -357,7 +510,7 @@ func draw_pond_edge(basin: Pool, fallback: float) -> void:
 				if water.depth_at(Vector2(x, offset)) > 0.145:
 					y = offset
 			if local_depth > 0.26:
-				var lift := minf(9.0, (local_depth - 0.26) * 10.0)
+				var lift := minf(10.0, (local_depth - 0.26) * 10.0) * height
 				edge.append(snap_pixel(to_screen(Vector2(x, y)) - Vector2(0, lift)))
 		if edge.size() > 1:
 			draw_polyline(edge, Color(0.49, 0.82, 0.77, height * 0.36), 0.5)
@@ -368,11 +521,15 @@ func draw_pond_edge(basin: Pool, fallback: float) -> void:
 		var h := water.depth_at(at)
 		if h <= 0.18:
 			continue
-		var p := to_screen(at) - Vector2(0, minf(7.0, (h - 0.18) * 7.0))
+		var p := to_screen(at) - Vector2(0, minf(8.0, (h - 0.18) * 8.0) * height)
 		var shimmer := 0.68 + sin(clock * 3.7 + piece.point.y * 0.36) * 0.23
-		var curve := PackedVector2Array([snap_pixel(p + Vector2(1.0, -2.0)), snap_pixel(p),
-			snap_pixel(p + Vector2(0.0, 1.0 + piece.radius * 0.16)), snap_pixel(p + Vector2(1.0, 2.5 + piece.radius * 0.16))])
-		draw_polyline(curve, Color(0.60, 0.78, 0.74, height * shimmer * 0.52), 0.5)
+		var extent := piece.radius * 0.42
+		var curve := PackedVector2Array([snap_pixel(p + Vector2(2.2, -extent)), snap_pixel(p + Vector2(0.4, -extent * 0.5)),
+			snap_pixel(p + Vector2(0.0, extent * 0.38)), snap_pixel(p + Vector2(1.4, extent))])
+		draw_polyline(curve, Color(0.61, 0.79, 0.75, height * shimmer * 0.75), 0.5)
+		if height > 0.35:
+			var eddy := p + Vector2(-6.0 - shimmer * 4.0, extent * 0.2)
+			draw_line(snap_pixel(eddy), snap_pixel(eddy + Vector2(3.2, -1.1)), Color(FOAM, height * shimmer * 0.27), 0.5)
 
 func draw_current() -> void:
 	for i in streaks.size():
@@ -384,11 +541,12 @@ func draw_current() -> void:
 		if speed < 0.75:
 			continue
 		var from := snap_pixel(to_screen(at))
-		var end := at + v.normalized() * minf(10.0, 1.0 + speed * 0.125)
+		var push := surge_at(at.x)
+		var end := at + v.normalized() * minf(16.0, 1.0 + speed * (0.125 + push * 0.08))
 		if not is_wet(end):
 			continue
 		var strength := smoothstep(7.0, 57.0, speed)
-		draw_line(from, snap_pixel(to_screen(end)), Color(FOAM, clampf(0.13 + strength * 0.62 * foam_strength, 0.0, 1.0)), 0.5 if strength < 0.78 else 1.0)
+		draw_line(from, snap_pixel(to_screen(end)), Color(FOAM, clampf(0.11 + (strength * 0.58 + push * 0.43) * foam_strength, 0.0, 0.95)), 0.5 if strength + push * 0.3 < 0.78 else 1.0)
 
 func draw_ripples() -> void:
 	for ripple in ripples:
@@ -415,7 +573,8 @@ func draw_shore_bubbles() -> void:
 		if not is_wet(stone.point) or v.x < 3.0:
 			continue
 		var side := v.normalized().orthogonal()
-		for i in 3:
+		var push := surge_at(stone.point.x)
+		for i in (6 if push > 0.26 else 3):
 			var phase := fposmod(clock * (0.56 + v.x * 0.013) + i * 0.29 + stone.shade * 0.11, 1.0)
 			var turn := phase * TAU
 			var along := stone.radius * 0.58 + phase * 6.0 + sin(turn) * 1.6
@@ -423,7 +582,7 @@ func draw_shore_bubbles() -> void:
 			at += side * (stone.radius * 0.63 + cos(turn) * 1.8) * (-1.0 if i % 2 == 0 else 1.0)
 			if is_wet(at):
 				var p := snap_pixel(to_screen(at))
-				draw_rect(Rect2(p, Vector2(1.0, 0.5)), Color(0.68, 0.87, 0.79, sin(phase * PI) * 0.35))
+				draw_rect(Rect2(p, Vector2(1.0 + push, 0.5)), Color(0.68, 0.87, 0.79, sin(phase * PI) * (0.35 + push * 0.36)))
 
 func draw_seams(basin: Pool) -> void:
 	if basin.wall.is_empty():
@@ -439,40 +598,54 @@ func draw_seams(basin: Pool) -> void:
 				continue
 			var at := Vector2(center + 9.0, water.row_y(lane))
 			var speed := water.velocity_at(at).x
-			if is_wet(at) and speed > best:
+			if speed > best and can_float_at(at, 0.1):
 				best = speed
 				jet = at
 				selected = lane
 		if selected < 0:
 			break
 		chosen.append(selected)
-		var force := smoothstep(8.0, 50.0, best)
+		var pressure := smoothstep(0.08, 0.53, pool_profile(basin, center).y)
+		var force := smoothstep(8.0, 49.0, best) * (0.50 + pressure * 0.50)
+		var seam_axis := water.velocity_at(jet).normalized()
+		var spill := jet + seam_axis * (3.0 + force * 6.0)
+		if can_float_at(spill, 0.1):
+			draw_line(snap_pixel(to_screen(jet)), snap_pixel(to_screen(spill)), Color(FOAM, force * 0.45), 0.5)
 		for fleck in 6:
-			var v := water.velocity_at(jet).normalized()
 			var offset := fposmod(clock * (12.0 + best) + fleck * 3.7, 7.0 + force * 15.0)
-			var at := jet + v * offset + Vector2(0, sin(fleck * 2.0 + clock * 11.0) * 1.9 * force)
+			var at := jet + seam_axis * offset + Vector2(0, sin(fleck * 2.0 + clock * 11.0) * 1.9 * force)
 			if is_wet(at):
 				draw_rect(Rect2(snap_pixel(to_screen(at)), Vector2(1.0 + force * 3.0, 0.5)), Color(FOAM, 0.26 + force * 0.68))
 
 func draw_breach_jet(event: Breach) -> void:
-	if event == null or event.phase not in [Breach.Phase.JET, Breach.Phase.SURGE] or event.strength < 0.035:
+	if event == null or event.phase == Breach.Phase.READY or event.strength < 0.035:
 		return
 	var wide := event.phase == Breach.Phase.SURGE
-	var rows := 9 if wide else 3
+	var rows := 16 if wide else (3 if event.prying else 6)
 	var fullness := clampf(event.strength * foam_strength, 0, 1)
-	var axis := event.direction
+	var axis := Vector2.RIGHT.lerp(event.direction, 0.58).normalized()
 	var side := axis.orthogonal()
+	var mouth := event.origin + axis * (7.0 if event.prying else 3.5)
+	var out := mouth + axis * (5.0 + fullness * (12.0 if wide else 5.0))
+	if is_wet(mouth) and is_wet(out):
+		var start := snap_pixel(to_screen(mouth))
+		var end := snap_pixel(to_screen(out))
+		draw_line(start, end, Color("#74aeaa", fullness * 0.57), 3.5 if wide else 1.5)
+		var head := start.lerp(end, 0.33 + sin(clock * 28.0) * 0.11)
+		draw_line(start, snap_pixel(head), Color("#ecf7e9", fullness * 0.87), 1.0 if wide else 0.5)
 	for i in rows:
-		var cross := (i - (rows - 1) * 0.5) * (1.1 + fullness)
-		var progress := fposmod(clock * (28.0 + 48.0 * fullness) + i * 4.17, 8.0 + 22.0 * fullness)
-		var at := event.origin + axis * (4.0 + progress) + side * cross
+		var spread := event.mouth_width * (0.70 if wide else 0.44)
+		var cross := (i / float(rows - 1) - 0.5) * spread
+		var progress := fposmod(clock * (24.0 + 54.0 * fullness) + i * 4.17, 7.0 + (25.0 if wide else 9.0) * fullness)
+		var at := mouth + axis * progress + side * cross * (1.0 + progress * 0.033)
 		if not is_wet(at):
 			continue
 		var local := water.velocity_at(at)
 		if local.length() < 4.0:
 			continue
-		var back := at - local.normalized() * (1.4 + fullness * (4.0 if wide else 2.5))
-		draw_line(snap_pixel(to_screen(back)), snap_pixel(to_screen(at)), Color(FOAM, fullness * (0.49 + i % 3 * 0.25)), 1.0 if wide else 0.5)
+		var back := at - local.normalized() * minf(progress, 1.4 + fullness * (6.2 if wide else 3.1))
+		var white := Color("#e3f9eb") if i % 3 == 0 else FOAM
+		draw_line(snap_pixel(to_screen(back)), snap_pixel(to_screen(at)), Color(white, fullness * (0.62 + i % 3 * 0.17)), (1.5 if i % 4 == 0 else 1.0) if wide else 0.5)
 		if wide and i % 2 == 0:
 			var spray := snap_pixel(to_screen(at) + Vector2(0.5, -2.0 - fposmod(i * 2.4 + clock * 16.0, 3.5)))
 			draw_rect(Rect2(spray, Vector2(1, 0.5)), Color(FOAM, fullness * 0.64))
@@ -495,8 +668,9 @@ func draw_materials() -> void:
 			p.x += sin(piece.point.y * 0.69 + piece.shade * 1.51) * 2.0
 		if riffle.has(piece) and piece.wear > 0.06:
 			p.x += roundf(sin(clock * 33.0 + piece.shade) * piece.wear * 2.4)
-		if (model.wall.has(piece) or lower.wall.has(piece)) and piece.wear > 0.32:
-			p.x += roundf(sin(clock * (20.0 + piece.shade * 5.0)) * piece.wear * 1.8)
+		var built := model.wall.has(piece) or lower.wall.has(piece)
+		if built and piece.wear > 0.24:
+			p.x += sin(clock * (20.0 + piece.shade * 5.0)) * smoothstep(0.24, 1.0, piece.wear) * 1.9
 			if piece.kind == Pool.EARTH:
 				var progress := fposmod(clock * 0.68 + piece.point.y * 3.7, 1.0)
 				for j in 3:
@@ -507,18 +681,14 @@ func draw_materials() -> void:
 		if absf(piece.point.y) <= Pool.BANK:
 			var water_height: float = water.depth_at(piece.point) * 12.0 - piece.visible_lift
 			submersion = clampf(water_height / (piece.radius * 0.80), 0.0, 0.88)
-		draw_piece(piece, p, 0.0, damp, submersion, piece.support == null)
+		p.x += piece.notch * 4.5
+		draw_piece(piece, p, piece.notch * 0.27, damp, submersion, piece.support == null, 0.84 if built else 1.0)
 		if piece == hovered:
 			draw_brackets(p, piece.radius)
 	for item in rolling:
 		var piece: Pool.Piece = item.piece
-		var from: Vector2 = item.origin
-		var age: float = item.age
-		var force: float = item.force
-		var x := from.x + (13.0 + force * 30.0) * age + minf(22.0, age * 32.0)
-		var y := from.y + sin(age * 5.6 + piece.shade) * minf(14.0, age * 15.0)
-		var p := to_screen(Vector2(x, y)) - Vector2(0, absf(sin(age * 11.5)) * maxf(0.0, 7.6 - age * 4.0))
-		draw_piece(piece, p, age * (4.0 if piece.kind == Pool.STONE else 1.0), 0.8)
+		var p := to_screen(item.point) - Vector2(0, item.lift)
+		draw_piece(piece, p, item.turn if piece.kind == Pool.STONE else item.turn * 0.35, 0.8)
 	if held != null:
 		draw_piece(held, (pointer - Vector2(0, maxf(5.0, preview_lift))).round(), 0.0)
 		var center := snap_pixel((pointer + Vector2(0, 5)).clamp(Vector2(8, 2), SIZE - Vector2(8, 3)))
@@ -575,13 +745,13 @@ func dampness(piece: Pool.Piece) -> float:
 	var wet := maxf(shore_memory[i] * 0.84, smoothstep(0.015, 0.12, water.depth[i]))
 	return wet * (1.0 - smoothstep(0.0, 12.0, piece.visible_lift))
 
-func draw_piece(piece: Pool.Piece, p: Vector2, roll: float, damp := 0.0, submersion := 0.0, seated := false) -> void:
+func draw_piece(piece: Pool.Piece, p: Vector2, roll: float, damp := 0.0, submersion := 0.0, seated := false, squash := 1.0) -> void:
 	if piece.kind == Pool.STONE:
-		draw_rock(piece, p, roll, damp, submersion, seated)
+		draw_rock(piece, p, roll, damp, submersion, seated, squash)
 		return
 	var r := piece.radius * (1.0 - piece.wear * 0.35)
 	var seed := fposmod(piece.radius * 0.317 + piece.shade * 0.247, 1.0)
-	var squash := lerpf(0.58, 0.83, seed)
+	squash *= lerpf(0.58, 0.83, seed)
 	var turn := roll + lerpf(-0.28, 0.31, seed)
 	p = snap_pixel(p + Vector2(0, seed * 1.4 if seated else 0.0))
 	var shape := PackedVector2Array()
@@ -631,11 +801,11 @@ func draw_piece(piece: Pool.Piece, p: Vector2, roll: float, damp := 0.0, submers
 	if submersion > 0.13:
 		draw_stone_waterline(shape, p.y + r * (0.51 - submersion * 0.69))
 
-func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersion: float, seated: bool) -> void:
+func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersion: float, seated: bool, squash: float) -> void:
 	var r := piece.radius
 	p = snap_pixel(p)
 	if seated:
-		var foot := p + Vector2(-r * 0.15, r * 0.66)
+		var foot := p + Vector2(-r * 0.15, r * 0.66 * squash)
 		var shadow := PackedVector2Array([Vector2(-1.02, 0.02), Vector2(-0.68, -0.33),
 			Vector2(0.54, -0.34), Vector2(0.91, -0.11), Vector2(0.53, 0.21), Vector2(-0.57, 0.27)])
 		for i in shadow.size():
@@ -649,7 +819,7 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	var dry := Color("#c3cdd2").lerp(Color("#fff6e5"), sunlight)
 	var wet := dry * Color("#779997")
 	var water_row := clampi(roundi((r * (0.71 - submersion * 0.92) - origin.y) * 2.0), 0, int(size.y))
-	draw_set_transform(p, roll)
+	draw_set_transform(p, roll, Vector2(1.0, squash))
 	draw_texture_rect(carving.texture, Rect2(origin, size * 0.5), false, dry)
 	if damp > 0.0 and water_row < int(size.y):
 		var lower_strip := Rect2(0, water_row, size.x, size.y - water_row)

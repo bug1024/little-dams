@@ -5,6 +5,7 @@ const Flow = preload("res://game/one_dam_grid.gd")
 const Breach = preload("res://game/one_dam_breach.gd")
 const View = preload("res://game/one_dam_view.gd")
 const Controls = preload("res://game/one_dam_controls.gd")
+const WaterAudio = preload("res://game/one_dam_water_audio.gd")
 const PIXELS := Vector2i(640, 400)
 const SCALE := 4.0
 const DETAIL := 2.0
@@ -28,12 +29,18 @@ var gate := Button.new()
 var creek: AudioStreamPlayer
 var music: AudioStreamPlayer
 var clack: AudioStreamPlayer
+var water_jet: AudioStreamPlayer
+var water_crest: AudioStreamPlayer
+var stone_splash: AudioStreamPlayer
 var held: Pool.Piece
 var held_floater: View.Floater
 var from_bank := false
 var grab := Vector2.ZERO
 var lag := 0.0
 var knock_cooldown := 0.0
+var seep_cooldown := 2.4
+var gate_plug: Pool.Piece
+var gate_pool: Pool
 
 func _ready() -> void:
 	canvas.size = PIXELS
@@ -54,6 +61,9 @@ func _ready() -> void:
 	scene.lower_breach = lower_breach
 	upper_breach.crest.connect(on_crest)
 	lower_breach.crest.connect(on_crest)
+	upper_breach.jet_started.connect(on_jet)
+	lower_breach.jet_started.connect(on_jet)
+	scene.stone_splash.connect(on_stone_splash)
 	scene.scale = Vector2.ONE * DETAIL
 	canvas.add_child(scene)
 	var picture := Sprite2D.new()
@@ -68,8 +78,14 @@ func _ready() -> void:
 	music = audio("res://game/one_dam_audio/afternoon.wav", -60.0, true)
 	audio("res://game/one_dam_audio/july_bank.wav", -12.5, true)
 	clack = audio("res://game/drop.wav", -16.0)
+	if can_play_audio():
+		water_jet = water_cue(WaterAudio.Cue.JET)
+		water_crest = water_cue(WaterAudio.Cue.CREST)
+		stone_splash = water_cue(WaterAudio.Cue.SPLASH)
 	model.released.connect(on_released.bind(false))
 	lower.released.connect(on_released.bind(true))
+	model.landed.connect(scene.support_impact)
+	lower.landed.connect(scene.support_impact)
 	install_cursors()
 	restart()
 
@@ -145,6 +161,12 @@ func audio(path: String, volume: float, loop := false) -> AudioStreamPlayer:
 func can_play_audio() -> bool:
 	return DisplayServer.get_name() != "headless"
 
+func water_cue(cue: WaterAudio.Cue) -> AudioStreamPlayer:
+	var player := AudioStreamPlayer.new()
+	player.stream = WaterAudio.water_cue(cue)
+	add_child(player)
+	return player
+
 func restart() -> void:
 	model.reset()
 	lower.reset()
@@ -154,24 +176,37 @@ func restart() -> void:
 	cancel_grab()
 	lag = 0.0
 	knock_cooldown = 0.0
+	seep_cooldown = 2.4
+	gate_plug = null
+	gate_pool = null
 	canvas.canvas_transform = Transform2D.IDENTITY
 	clack.stop()
+	if water_jet != null:
+		water_jet.stop()
+		water_crest.stop()
+		stone_splash.stop()
 	for row in [
-		[146, -30, 12, Pool.STONE, 0], [146, -17, 10, Pool.STONE, 2],
-		[145, -9, 8, Pool.EARTH, 1], [146, 0, 11, Pool.STONE, 3],
-		[145, 9, 8, Pool.EARTH, 0], [146, 18, 10, Pool.STONE, 2],
-		[146, 30, 12, Pool.STONE, 0], [137, -24, 8, Pool.EARTH, 2],
-		[137, 25, 8, Pool.EARTH, 1],
+		[147, -31, 11, Pool.STONE, 0], [144, -18, 11, Pool.STONE, 2],
+		[146, -8, 7, Pool.EARTH, 1], [148, 0, 10, Pool.STONE, 3],
+		[153, 20, 12, Pool.STONE, 2],
+		[147, 31, 10, Pool.STONE, 0], [158, -24, 8, Pool.STONE, 1],
+		[163, 26, 7, Pool.STONE, 3], [137, 24, 7, Pool.EARTH, 1],
+		[153, -13, 7, Pool.EARTH, 2], [160, 15, 7, Pool.EARTH, 1],
 	]:
 		var piece := Pool.Piece.new(Vector2(row[0], row[1]), row[2], row[3], row[4])
 		model.wall.append(piece)
 		if row[3] == Pool.EARTH and absf(row[1]) < 12.0:
-			piece.wear = 0.24
+			piece.wear = 0.20
+	var mud_support := Pool.Piece.new(Vector2(149, 10), 8.0, Pool.EARTH, 0)
+	model.place(mud_support, mud_support.point, null)
+	mud_support.wear = 0.20
+	var chip := Pool.Piece.new(mud_support.point + Vector2(2.0, 3.5), 3.5, Pool.STONE, 1)
+	model.place(chip, chip.point, mud_support)
 
 	for row in [[73, 50, 12, 0], [98, 48, 12, 1], [127, 57, 9, 0], [163, 52, 11, 1], [189, 56, 15, 0], [241, 47, 17, 0], [264, 44, 10, 1], [292, 48, 9, 0], [243, -61, 13, 0], [275, -63, 10, 1], [296, -57, 15, 0],
 			[95, -75, 11, 0], [124, -70, 10, 1], [161, -71, 9, 0], [195, -70, 12, 0]]:
 		scene.bank.append(Pool.Piece.new(Vector2(row[0], row[1]), row[2], row[3], row[0] % 4))
-	water.reset(model.center(146.0))
+	water.reset(148.0, true, 0.91)
 	water.rebuild_obstacles(model, lower)
 	gate.disabled = false
 
@@ -179,6 +214,7 @@ func _process(delta: float) -> void:
 	knock_cooldown = maxf(0.0, knock_cooldown - delta)
 	lag += minf(delta, 0.1)
 	while lag >= STEP:
+		advance_gate(STEP)
 		model.settle(STEP)
 		lower.settle(STEP)
 		for substep in creek_pace:
@@ -194,12 +230,17 @@ func _process(delta: float) -> void:
 	update_grab(pointer)
 	scene.hovered = find_piece(pointer)
 	scene.hovered_floater = null if scene.hovered != null else scene.floater_at(pointer)
-	gate.disabled = model.wall.is_empty() and lower.wall.is_empty()
+	gate.disabled = gate_plug != null or (model.wall.is_empty() and lower.wall.is_empty())
 	var fade := maxf(0.001, smoothstep(0.0, 1.3, scene.clock))
 	music.volume_db = -12.0 + linear_to_db(fade)
 	var current := maxf(water.discharge_at(151.0), water.discharge_at(249.0))
 	var creek_level := lerpf(-5.0, -2.0, smoothstep(0.35, 2.5, current))
 	creek.volume_db = lerpf(creek.volume_db, creek_level, 1.0 - exp(-delta * 0.75))
+	var head := maxf(scene.pool_profile(model, 146.0).y, scene.pool_profile(lower, 262.0).y)
+	var pitch := 1.0 - smoothstep(0.10, 0.58, head) * 0.08 + scene.surge_at(187) * 0.10
+	creek.pitch_scale = lerpf(creek.pitch_scale, pitch, 1.0 - exp(-delta * 2.8))
+	if water_jet != null:
+		update_seep_audio(delta, head)
 
 func find_piece(point: Vector2) -> Pool.Piece:
 	var closest: Pool.Piece
@@ -241,6 +282,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	var point := stage_pointer(event.position)
 	if event.pressed:
 		held = find_piece(point)
+		if held == gate_plug:
+			held = null
 		if held != null:
 			grab = point
 			from_bank = scene.bank.has(held) or scene.riffle.has(held)
@@ -347,6 +390,8 @@ func can_return_to_bank(cursor: Vector2, target: Vector2, support: Pool.Piece) -
 	return support == null and not from_bank and absf(target.y) > 37.0 and View.SAFE_BANK.has_point(cursor)
 
 func opening() -> void:
+	if gate_plug != null:
+		return
 	var basin := model if not model.wall.is_empty() else lower
 	var plug: Pool.Piece
 	var best := INF
@@ -359,12 +404,45 @@ func opening() -> void:
 			best = score
 			plug = piece
 	if plug != null:
-		basin.remove(plug, clampf(water.pool_head(plug.point.x) * 1.57, 0.4, 1.8))
+		if plug == held:
+			cancel_grab()
+		gate_plug = plug
+		gate_pool = basin
+		var event := lower_breach if basin == lower else upper_breach
+		event.open(plug.point, water, true)
+		scene.track_release(plug.point.x, true)
+		plug.notch = 0.30
+		event.pilot_limit = maxf(1.5, plug.radius * plug.notch * 0.65)
+		scene.nudge_camera(0.10)
+		play_knock(1.08)
+
+func advance_gate(dt: float) -> void:
+	if gate_plug == null:
+		return
+	if not gate_pool.wall.has(gate_plug):
+		var event := lower_breach if gate_pool == lower else upper_breach
+		event.prying = false
+		gate_plug = null
+		gate_pool = null
+		return
+	# The pry opens the first slit. Water pushing through it advances the break.
+	var push := smoothstep(0.10, 0.82, water.gap_flow(gate_plug.point))
+	gate_plug.notch = minf(1.0, gate_plug.notch + dt * (0.72 + push * 1.52))
+	var event := lower_breach if gate_pool == lower else upper_breach
+	event.pilot_limit = maxf(1.5, gate_plug.radius * gate_plug.notch * 0.65)
+	if gate_plug.notch >= 1.0:
+		var piece := gate_plug
+		var basin := gate_pool
+		event.prying = false
+		gate_plug = null
+		gate_pool = null
+		basin.remove(piece, clampf(water.pool_head(piece.point.x) * 1.57, 0.4, 1.8))
 
 func on_released(piece: Pool.Piece, force: float, lower_basin: bool) -> void:
 	if held == piece:
 		cancel_grab()
 	var event := lower_breach if lower_basin else upper_breach
+	scene.track_release(piece.point.x)
 	event.open(piece.point, water)
 	scene.launch(piece, force)
 	if piece.kind == Pool.STONE:
@@ -372,7 +450,35 @@ func on_released(piece: Pool.Piece, force: float, lower_basin: bool) -> void:
 
 func on_crest(point: Vector2, strength: float) -> void:
 	scene.wave_impact(point, strength)
-	play_knock(0.80)
+	if water_crest != null:
+		water_crest.volume_db = lerpf(-19.0, -11.0, smoothstep(0.72, 1.65, strength))
+		water_crest.play()
+
+func on_jet(strength: float) -> void:
+	if water_jet != null:
+		water_jet.pitch_scale = 1.0
+		water_jet.volume_db = lerpf(-29.0, -20.0, strength)
+		water_jet.play()
+
+func update_seep_audio(delta: float, head: float) -> void:
+	seep_cooldown = maxf(0.0, seep_cooldown - delta)
+	if seep_cooldown > 0.0 or head < 0.22 or water_jet.playing:
+		return
+	if upper_breach.phase != Breach.Phase.READY or lower_breach.phase != Breach.Phase.READY:
+		return
+	var basin := model if not model.wall.is_empty() else lower
+	var seep := water.gap_flow(Vector2(basin.center(146.0), 0.0))
+	if seep > 0.09:
+		water_jet.pitch_scale = 1.16
+		water_jet.volume_db = lerpf(-39.0, -33.0, smoothstep(0.09, 0.80, seep))
+		water_jet.play()
+		seep_cooldown = randf_range(2.8, 4.4)
+
+func on_stone_splash(mass: float, strength: float) -> void:
+	if stone_splash != null:
+		stone_splash.pitch_scale = lerpf(1.24, 0.78, mass)
+		stone_splash.volume_db = lerpf(-25.0, -15.0, clampf(strength, 0.0, 1.0))
+		stone_splash.play()
 
 func play_knock(pitch: float) -> void:
 	if knock_cooldown > 0.0 or not can_play_audio():

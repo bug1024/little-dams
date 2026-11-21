@@ -3,7 +3,7 @@ render_mode unshaded;
 
 #include "res://game/one_dam_daylight.gdshaderinc"
 
-uniform float afternoon_time;
+uniform vec4 canopy_flutter;
 uniform sampler2D channel_mask : filter_nearest, repeat_disable;
 uniform sampler2D channel_profile : filter_linear, repeat_disable;
 uniform sampler2D flow_state : filter_linear, repeat_disable;
@@ -11,6 +11,29 @@ uniform sampler2D shore_memory : filter_linear, repeat_disable;
 
 float fringe(vec2 p, vec2 root, vec2 radius) {
 	return 1.0 - smoothstep(0.45, 1.0, length((p - root) / radius));
+}
+
+float branch_sway(vec2 p) {
+	vec2 cluster = p * vec2(43.0, 26.0);
+	float branch = earth_patch(cluster);
+	float tip = earth_patch(cluster * 0.56 + vec2(3.1, 5.2));
+	return mix(mix(canopy_flutter.x, canopy_flutter.y, branch),
+		mix(canopy_flutter.z, canopy_flutter.w, branch), tip);
+}
+
+float cast_leaf_shade(vec2 p, vec2 texel) {
+	// Only the small branch tips at the existing tree-shadow edge cast moving shade.
+	float fringe_mask = fringe(p, vec2(0.32, 0.14), vec2(0.24, 0.16));
+	if (fringe_mask <= 0.0) {
+		return 0.0;
+	}
+	vec2 source = p - vec2(0.16, 0.055);
+	float gust = wind_at(source.x);
+	float motion = branch_sway(source);
+	vec2 sway = (motion * vec2(2.1, -0.8) + gust * vec2(0.9, 0.35)) * texel;
+	float patches = earth_patch((p - sway) * vec2(107.0, 80.0));
+	float gaps = earth_patch(p * vec2(23.0, 17.0) + vec2(2.4, 6.1));
+	return fringe_mask * smoothstep(0.54, 0.71, patches) * smoothstep(0.29, 0.69, gaps);
 }
 
 void fragment() {
@@ -23,11 +46,15 @@ void fragment() {
 	float hanging = fringe(p, vec2(0.153, 0.122), vec2(0.17, 0.13));
 	float fern = fringe(p, vec2(0.464, 0.305), vec2(0.07, 0.055));
 	float reeds = fringe(p, vec2(0.047, 0.728), vec2(0.072, 0.1));
-	float gust = smoothstep(0.70, 0.99, sin(afternoon_time * 0.145));
-	float movement = hanging * (sin(afternoon_time * 0.95 + p.y * 38.0) + gust * 0.56);
-	movement += fern * sin(afternoon_time * 0.72 + p.x * 48.0);
-	movement += reeds * sin(afternoon_time * 1.63 + p.y * 42.0);
-	vec2 moved = p + round(vec2(movement * 2.65, movement * -0.78) * green) * texel;
+	float gust = wind_at(p.x);
+	float flutter = 0.80 + gust * 0.75;
+	float movement = hanging * branch_sway(p);
+	movement += fern * branch_sway(p + vec2(0.12, 0.04));
+	movement += reeds * branch_sway(p + vec2(0.24, 0.03));
+	float lean = gust * (0.20 + hanging * 0.87 + fern * 0.58 + reeds * 0.98);
+	// Sampling against the gust shifts the painted leaves downwind.
+	vec2 displacement = -movement * flutter * vec2(2.7, -0.85) - lean * vec2(1.8, 0.72);
+	vec2 moved = p + round(displacement * green) * texel;
 	art = texture(TEXTURE, moved).rgb;
 	// The forest recedes away from the creek while the interactive layer stays crisp.
 	float distance_to_creek = abs(p.y - (0.55 - p.x * 0.17));
@@ -64,5 +91,18 @@ void fragment() {
 	// The plate contains colored water fringe past the playable mask. Tint it as damp ground.
 	float painted_water = smoothstep(0.12, 0.26, art.g - art.r) * smoothstep(0.60, 0.83, art.b / max(art.g, 0.01));
 	art = mix(art, luma * vec3(0.79, 0.85, 0.65), painted_water * smoothstep(0.04, 0.40, bank));
-	COLOR = vec4(afternoon_light(art, p, afternoon_time, wet_bank), 1.0);
+	// Leave the rock and soil warm, with less orange glare and fewer yellow-green peaks.
+	vec3 land = afternoon_light(art, p, wet_bank);
+	float value = dot(land, vec3(0.26, 0.63, 0.11));
+	float ochre = smoothstep(0.055, 0.24, land.r - land.b) * smoothstep(0.27, 0.67, value);
+	float foliage = smoothstep(0.035, 0.19, land.g - land.b) * smoothstep(-0.04, 0.065, land.g - land.r);
+	land = mix(land, value * vec3(1.07, 1.005, 0.91), 0.18 + max(ochre * 0.40, foliage * 0.37));
+	land -= smoothstep(0.48, 0.78, value) * vec3(0.072, 0.052, 0.030);
+	float sun = max(fringe(p, vec2(0.71, 0.16), vec2(0.43, 0.23)),
+		fringe(p, vec2(0.58, 0.82), vec2(0.44, 0.23)) * 0.72);
+	float sunlit = sun * smoothstep(0.30, 0.59, value) * (0.79 + patches * 0.21);
+	land += vec3(0.067, 0.059, 0.045) * sunlit;
+	float leaf_shade = cast_leaf_shade(p, texel) * smoothstep(0.30, 0.58, value);
+	land *= mix(vec3(1.0), vec3(0.88, 0.91, 0.96), leaf_shade * (0.72 + sunlit * 0.28));
+	COLOR = vec4(land, 1.0);
 }

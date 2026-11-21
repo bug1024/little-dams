@@ -8,6 +8,16 @@ uniform sampler2D channel_profile : filter_linear, repeat_disable;
 uniform sampler2D flow_state : filter_linear, repeat_disable;
 uniform float creek_time;
 uniform sampler2D shore_memory : filter_linear, repeat_disable;
+uniform sampler2D surge_field : filter_linear, repeat_disable;
+uniform vec2 upper_pool;
+uniform vec2 lower_pool;
+const vec2 WIND = vec2(0.94, 0.34);
+
+float backed_water(float x, vec2 pond) {
+	float distance = pond.x - x;
+	return smoothstep(-0.016, 0.026, distance) * (1.0 - smoothstep(0.09, 0.31, distance))
+		* smoothstep(0.08, 0.63, pond.y);
+}
 
 void fragment() {
 	vec3 plate = texture(TEXTURE, UV).rgb;
@@ -40,35 +50,52 @@ void fragment() {
 	gravel *= 0.94 + 0.16 * veins;
 	float damp = max(smoothstep(0.008, 0.050, depth), shore.r * 0.86);
 	vec3 damp_gravel = gravel * vec3(0.61, 0.72, 0.75);
-	float shade = leaf_shade(art_uv, creek_time);
+	float shade = canopy_cover(art_uv);
 	float moss = bank * damp * smoothstep(0.50, 0.79, patches + veins * 0.17 + shade * 0.15);
 	damp_gravel = mix(damp_gravel, vec3(0.20, 0.26, 0.14) * (0.79 + pebble * 0.48), moss * 0.75);
 
 	float deep = smoothstep(0.12, 0.90, depth);
+	float held_water = max(backed_water(art_uv.x, upper_pool), backed_water(art_uv.x, lower_pool));
+	held_water *= smoothstep(0.20, 0.62, depth);
 	vec3 shallow_water = plate * vec3(0.81, 0.86, 0.83) + vec3(0.036, 0.022, 0.005);
 	shallow_water = mix(shallow_water, damp_gravel * vec3(0.85, 1.09, 1.14), 0.30 + bank * 0.21);
 	vec3 pool = mix(vec3(0.073, 0.19, 0.23), plate * vec3(0.51, 0.63, 0.80), 0.54);
 	vec3 water = mix(shallow_water, pool, deep * 0.90);
+	water = mix(water, water * vec3(0.62, 0.76, 0.88) + vec3(0.004, 0.009, 0.016), held_water * 0.76);
 	float algae = slow * (1.0 - deep) * smoothstep(0.42, 0.76, patches + veins * 0.19 + shade * 0.11);
 	water = mix(water, vec3(0.23, 0.27, 0.17), algae * 0.19);
 	water = mix(water, sediment, min(0.87, silt * (1.0 - deep * 0.87) * 0.39 + state.a * 0.69));
 
-	float sun = (1.0 - shade) * smoothstep(0.35, 0.9, art_uv.x + art_uv.y * 0.52);
+	float breeze = wind_at(art_uv.x);
+	float lit = 1.0 - shade * 0.65;
+	float sun = lit * smoothstep(0.35, 0.9, art_uv.x + art_uv.y * 0.52);
 	float glint = step(0.93, sin(pixel.x * 0.123 - creek_time * 1.6 + sin(pixel.y * 0.29)));
 	glint *= smoothstep(0.47, 0.72, earth_patch(pixel / vec2(11.0, 3.5) - shore.gb * 0.025));
-	water = mix(water, vec3(0.76, 0.88, 0.79), glint * sun * (1.0 - deep * 0.76) * 0.22);
+	water = mix(water, vec3(0.83, 0.88, 0.80), glint * sun * (1.0 - deep * 0.76) * (0.26 + breeze * 0.12));
+
+	// Gusts roughen patches of the surface that drift downwind and sparkle where the sun reaches.
+	vec2 drift = pixel - WIND * creek_time * 9.0;
+	float paws = smoothstep(0.55, 0.72, earth_patch(drift / vec2(52.0, 26.0))) * smoothstep(0.30, 0.85, breeze);
+	float chop = step(0.80, earth_patch(drift / vec2(3.0, 1.0) + vec2(0.0, floor(creek_time * 6.0) * 0.37)));
+	water = mix(water, water * vec3(0.95, 0.98, 1.02) + vec3(0.0, 0.01, 0.02), paws * 0.30);
+	water = mix(water, vec3(0.72, 0.82, 0.79), chop * paws * (0.055 + sun * 0.27));
 
 	vec2 motion = pixel - shore.gb;
+	float push = texture(surge_field, vec2(art_uv.x, 0.5)).r;
 	float bend = sin(motion.y * 0.16) * 1.79 + sin(motion.x * 0.027 + motion.y * 0.061);
 	float ripple = step(0.959, sin(motion.x * 0.105 + bend));
 	ripple *= step(0.61, cos(motion.y * 0.38 + motion.x * 0.064));
-	water = mix(water, vec3(0.55, 0.79, 0.76), ripple * (0.058 + speed * 0.24));
+	water = mix(water, vec3(0.55, 0.79, 0.76), ripple * (0.058 + speed * 0.24) * (1.0 - held_water * 0.42));
+	float broken_crest = step(0.66, earth_patch(motion / vec2(12.0, 2.6)));
+	water = mix(water, vec3(0.74, 0.87, 0.81), broken_crest * push * smoothstep(0.13, 0.45, speed) * 0.39);
 	float edge = 0.068 + sin(pixel.x * 0.063 + creek_time * 1.2) * 0.005;
 	float rim = 1.0 - smoothstep(0.05, 0.16, channel.g);
 	float meniscus = max(1.0 - smoothstep(0.002, 0.019, abs(depth - edge)), rim);
 	float foam = step(0.59, earth_patch(vec2(motion.x * 0.075, pixel.y * 0.25))) * smoothstep(0.02, 0.30, speed);
 	water = mix(water, vec3(0.68, 0.80, 0.70), meniscus * (0.03 + foam * 0.38));
 
-	float cover = smoothstep(0.032, 0.074, depth);
-	COLOR = vec4(afternoon_light(mix(mix(gravel, damp_gravel, damp), water, cover), art_uv, creek_time, max(cover, damp * 0.59)), channel.r);
+	float cover = smoothstep(0.034, 0.101, depth);
+	float value = dot(water, vec3(0.26, 0.63, 0.11));
+	water = mix(water, value * vec3(0.86, 1.01, 0.99), 0.18 + deep * 0.08);
+	COLOR = vec4(afternoon_light(mix(mix(gravel, damp_gravel, damp), water, cover), art_uv, max(cover, damp * 0.59)), channel.r);
 }
