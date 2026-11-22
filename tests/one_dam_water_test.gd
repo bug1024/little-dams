@@ -5,6 +5,8 @@ const OneDam = preload("res://game/one_dam.gd")
 const Flow = preload("res://game/one_dam_grid.gd")
 const Materials = preload("res://game/one_dam_water.gd")
 const Breach = preload("res://game/one_dam_breach.gd")
+const View = preload("res://game/one_dam_view.gd")
+const Hearth = preload("res://game/one_dam_hearth.gd")
 
 var failures := 0
 var game: OneDam
@@ -26,10 +28,13 @@ func run() -> void:
 	check_stone_weight()
 	check_support_loss()
 	check_floater_release()
+	check_forage()
+	check_hearth()
 	check_rain()
 	check_ground_insect_encounter()
 	check_ground_insect_terrain()
 	check_insect_drag()
+	check_cicada()
 	check_frog_and_loach()
 	game.free()
 	quit(failures)
@@ -341,6 +346,104 @@ func check_floater_release() -> void:
 		"The flood frees a trapped twig and disturbs the downstream bank (travel %.1f)" % (twig.point.x - held_x))
 	game.scene.wind.next_gust = game.scene.wind.clock + 3.5
 
+func check_forage() -> void:
+	game.restart()
+	var view := game.scene
+	var flower: View.Floater
+	var grass: View.Floater
+	var branch: View.Floater
+	for item in view.floaters:
+		match item.forage:
+			View.Forage.FLOWER:
+				if flower == null:
+					flower = item
+			View.Forage.FOXTAIL:
+				if grass == null:
+					grass = item
+			View.Forage.THIN_BRANCH:
+				if branch == null:
+					branch = item
+	var dam_piece := put(game.model, Vector2(151, 12), 10.0, Materials.STONE)
+	var creek := view.to_screen(Vector2(121, 0))
+	pointer_button(view.forage_screen(flower) + view.forage_axis(flower), true)
+	var picked := game.held_floater == flower
+	pointer_button(creek, false)
+	frames(36)
+	expect(picked and not flower.rooted and flower.afloat and flower.point.x > 122.0,
+		"A plucked flower drifts downstream")
+	pointer_button(view.forage_screen(grass) + view.forage_axis(grass) * 0.8, true)
+	picked = game.held_floater == grass
+	pointer_button(view.piece_screen(dam_piece), false)
+	expect(picked and grass.host == dam_piece and not grass.rooted and not grass.afloat,
+		"A plucked foxtail can decorate a dam stone")
+	game.model.remove(dam_piece, 0.5)
+	frames(1)
+	expect(grass.host == null and grass.afloat, "A decoration falls free when its dam stone is washed away")
+	pointer_button(view.forage_screen(branch) + view.forage_axis(branch) * 0.5, true)
+	picked = game.held_floater == branch
+	var bed := Vector2(216, 1)
+	pointer_button(view.to_screen(bed), false)
+	frames(120)
+	expect(picked and branch.planted and not branch.afloat and branch.point.distance_to(bed) < 0.1,
+		"A long twig stays planted in a flowing creek")
+	pointer_button(view.forage_screen(branch) + view.forage_axis(branch) * 0.8, true)
+	picked = game.held_floater == branch
+	pointer_button(Vector2(82, 177), false)
+	expect(picked and not branch.planted, "The planted twig can be pulled out and set on the bank")
+
+func check_hearth() -> void:
+	game.restart()
+	var view := game.scene
+	var hearth := view.hearth
+	expect(view.on_bank(Hearth.CENTER), "The hearth sits in the marked space on the bank")
+	pointer_button(Hearth.CENTER, true)
+	pointer_button(Hearth.CENTER, false)
+	expect(not hearth.burning, "An empty hearth cannot be lit")
+	var branch: View.Floater = view.floaters.filter(func(item: View.Floater) -> bool:
+		return item.forage == View.Forage.THIN_BRANCH)[0]
+	var grass: View.Floater = view.floaters.filter(func(item: View.Floater) -> bool:
+		return item.forage == View.Forage.DRY_GRASS)[0]
+	pointer_button(view.forage_screen(branch) + view.forage_axis(branch) * 0.55, true)
+	pointer_button(Hearth.CENTER, false)
+	expect(not view.floaters.has(branch) and hearth.wood > 0.0 and not hearth.can_ignite(),
+		"A dry branch lands in the hearth and needs grass to ignite")
+	pointer_button(view.forage_screen(grass) + view.forage_axis(grass) * 0.60, true)
+	pointer_button(Hearth.CENTER, false)
+	pointer_button(Hearth.CENTER, true)
+	pointer_button(Hearth.CENTER, false)
+	frames(120)
+	var before := hearth.heat
+	expect(not view.floaters.has(grass) and hearth.burning and before > 0.35 and not hearth.puffs.is_empty(),
+		"Clicking a fueled hearth lights it and starts the smoke")
+	var spare: View.Floater = view.floaters.filter(func(item: View.Floater) -> bool:
+		return item.forage == View.Forage.THIN_BRANCH)[0]
+	pointer_button(view.forage_screen(spare) + view.forage_axis(spare) * 0.55, true)
+	pointer_button(Hearth.CENTER, false)
+	expect(not view.floaters.has(spare) and is_equal_approx(hearth.heat, before),
+		"Adding wood leaves flame strength continuous")
+	frames(84)
+	expect(hearth.heat > before + 0.12, "The extra wood grows the fire")
+	before = hearth.heat
+	game.toggle_rain()
+	frames(120)
+	expect(hearth.burning and hearth.heat > 0.0 and hearth.heat < before, "Rain shrinks the fire gradually")
+	frames(410)
+	expect(not hearth.burning and hearth.heat == 0.0 and hearth.ash > 0.50 and hearth.puffs.is_empty(),
+		"Rain puts out the hearth, the smoke disperses and black ash remains")
+	game.restart()
+	expect(hearth.ash == 0.0 and hearth.wood == 0.0 and hearth.grass == 0.0,
+		"Restart clears the hearth and restores the fuel")
+	hearth.add(true)
+	hearth.add(false)
+	hearth.ignite()
+	for i in 1200:
+		hearth.advance(1.0 / 60.0, 0.0, view.wind)
+		if hearth.wood < 0.17:
+			break
+	expect(hearth.burning and hearth.heat > 0.0 and hearth.heat < 0.23 and hearth.ash > 0.42,
+		"Low fuel leaves a weak fire above an ash bed")
+	game.restart()
+
 func check_rain() -> void:
 	game.restart()
 	frames(330)
@@ -469,6 +572,24 @@ func check_insect_drag() -> void:
 	pointer_button(landing, false)
 	expect(grabbed and view.summer.insect_position == landing and view.summer.temporary_perch,
 		"The dragonfly can be picked up and set down")
+
+func check_cicada() -> void:
+	game.restart()
+	var view := game.scene
+	var start := view.summer.cicada_position
+	frames(120)
+	expect(view.summer.cicada_position == start and view.on_bank(start), "The cicada rests on its bank leaf")
+	pointer_button(start, true)
+	expect(view.summer.cicada_held and view.holding_animal(), "The hand can grab the green cicada")
+	pointer_button(Vector2(-5, -5), false)
+	expect(not view.summer.cicada_held and view.summer.cicada_position == start, "An invalid cicada drop restores its perch")
+	pointer_button(start, true)
+	var landing := Vector2(121.0, 45.0)
+	pointer_button(landing, false)
+	frames(120)
+	expect(not view.summer.cicada_held and view.summer.cicada_position == landing, "The cicada stays where the player sets it down")
+	game.restart()
+	expect(view.summer.cicada_position == start, "Restart returns the cicada to its leaf")
 
 func check_frog_and_loach() -> void:
 	game.restart()

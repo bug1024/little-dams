@@ -10,6 +10,7 @@ const Air = preload("res://game/one_dam_air.gd")
 const Rain = preload("res://game/one_dam_rain.gd")
 const GroundInsects = preload("res://game/one_dam_ground_insects.gd")
 const Frog = preload("res://game/one_dam_frog.gd")
+const Hearth = preload("res://game/one_dam_hearth.gd")
 const SIZE := Vector2(320, 200)
 const CHANNEL_MASK := preload("res://game/one_dam_channel.png")
 const PLATE := preload("res://game/one_dam_plate.png")
@@ -25,6 +26,8 @@ signal stone_splash(mass: float, strength: float)
 const CHANNEL_Y := [89.2, 94.6, 100.3, 108.1, 111.5, 118.2, 117.9, 113.7, 117.0, 114.7, 112.4, 109.2, 105.0, 100.9, 96.8, 89.9, 84.3, 78.0, 72.1, 68.8, 66.0]
 const CHANNEL_RADIUS := [19.8, 19.8, 22.4, 24.1, 22.1, 23.6, 24.9, 26.5, 30.6, 31.7, 32.8, 31.4, 26.0, 25.6, 27.7, 23.1, 24.4, 23.2, 20.8, 21.3, 22.2]
 
+enum Forage { NONE, FLOWER, FOXTAIL, THIN_BRANCH, DRY_GRASS }
+
 class Floater:
 	var point: Vector2
 	var shore: Vector2
@@ -35,12 +38,22 @@ class Floater:
 	var drift := Vector2.ZERO
 	var caught := false
 	var angle := 0.0
+	var forage := Forage.NONE
+	var tint := Color.WHITE
+	var rooted := false
+	var planted := false
+	var host: Pool.Piece
+	var host_offset := Vector2.ZERO
+	var soaked := 0.0
 
 	func _init(at: Vector2, is_twig: bool, turn: float) -> void:
 		point = at
 		shore = at
 		twig = is_twig
 		angle = turn
+
+	func is_firewood() -> bool:
+		return twig or forage == Forage.THIN_BRANCH
 
 class RollingPiece:
 	var piece: Pool.Piece
@@ -85,9 +98,11 @@ var ground_insects := GroundInsects.new()
 var frog := Frog.new()
 var wind := Wind.new()
 var rain := Rain.new()
+var hearth := Hearth.new()
 var painted_ground := PLATE.get_image()
 var air := Air.new()
 var rock_art := RockArt.new()
+var hearth_rim: Array[Pool.Piece] = []
 var shore_memory := PackedFloat32Array()
 var bed_deposit := PackedFloat32Array()
 var surface_travel := PackedVector2Array()
@@ -105,6 +120,9 @@ var surge_texture := ImageTexture.create_from_image(surge_image)
 var last_crest_x := -1.0
 
 func _ready() -> void:
+	for stone: Vector3 in [Vector3(-13, 0, 3.2), Vector3(-8, -5, 3.9), Vector3(2, -6, 2.9),
+			Vector3(12, -2, 3.4), Vector3(10, 4, 2.5), Vector3(-5, 5, 2.7)]:
+		hearth_rim.append(Pool.Piece.new(Vector2(stone.x, stone.y), stone.z, Pool.STONE, hearth_rim.size() % 4))
 	shore_memory.resize(Flow.COUNT)
 	bed_deposit.resize(Flow.COUNT)
 	quiet_flow.resize(Flow.COLUMNS)
@@ -179,6 +197,7 @@ func rain_contact(point: Vector2) -> Rain.Contact:
 
 func clear() -> void:
 	rain.clear()
+	hearth.reset()
 	ground_insects.reset(to_screen)
 	frog.reset()
 	summer.fish_held = false
@@ -188,6 +207,8 @@ func clear() -> void:
 	summer.fish_due = summer.clock + 4.0
 	summer.insect_held = false
 	summer.temporary_perch = false
+	summer.cicada_position = Summer.CICADA_PERCH
+	summer.cicada_held = false
 	bank.clear()
 	pipes.clear()
 	rolling.clear()
@@ -205,6 +226,23 @@ func clear() -> void:
 	for row in [[57, 60, false, 0.5], [63, -77, true, -0.22], [123, 71, false, -0.39],
 			[221, 58, true, 0.18], [256, -79, false, 1.1], [281, 56, false, -0.7]]:
 		floaters.append(Floater.new(Vector2(row[0], row[1]), row[2], row[3]))
+	for row in [
+		[Vector2(49, 135), Forage.FLOWER, Color("#deb36d")], [Vector2(55, 138), Forage.FLOWER, Color("#eadbc0")],
+		[Vector2(104, 78), Forage.FLOWER, Color("#cc89a4")], [Vector2(110, 80), Forage.FLOWER, Color("#afa1cd")],
+		[Vector2(202, 148), Forage.FLOWER, Color("#e5c16d")], [Vector2(207, 150), Forage.FLOWER, Color("#dc987d")],
+		[Vector2(83, 147), Forage.FOXTAIL, Color("#c0a56a")], [Vector2(89, 146), Forage.FOXTAIL, Color("#a8a668")],
+		[Vector2(178, 70), Forage.FOXTAIL, Color("#b7aa69")], [Vector2(272, 116), Forage.FOXTAIL, Color("#bfac78")],
+		[Vector2(30, 123), Forage.FOXTAIL, Color("#b9ac6a")], [Vector2(148, 152), Forage.FOXTAIL, Color("#a7aa76")],
+		[Vector2(250, 117), Forage.FOXTAIL, Color("#b6a56d")],
+		[Vector2(81, 175), Forage.THIN_BRANCH, Color("#a88761")], [Vector2(236, 35), Forage.THIN_BRANCH, Color("#ae9069")],
+		[Vector2(210, 170), Forage.DRY_GRASS, Color("#bda16a")], [Vector2(247, 168), Forage.DRY_GRASS, Color("#ac9462")],
+		[Vector2(198, 178), Forage.DRY_GRASS, Color("#c2a873")], [Vector2(267, 151), Forage.DRY_GRASS, Color("#baa273")],
+	]:
+		var item := Floater.new(from_screen(row[0]), false, -0.28 if row[0].y > 100.0 else 0.31)
+		item.forage = row[1]
+		item.tint = row[2]
+		item.rooted = item.forage in [Forage.FLOWER, Forage.FOXTAIL]
+		floaters.append(item)
 	held_floater = null
 	hovered_floater = null
 	streaks.clear()
@@ -364,11 +402,80 @@ func settle_leaf(screen: Vector2, turn: float) -> bool:
 	return true
 
 func floater_at(cursor: Vector2) -> Floater:
+	var closest: Floater
+	var best := INF
 	for item in floaters:
+		if item.forage != Forage.NONE:
+			var base := forage_screen(item)
+			var tip := base + forage_axis(item)
+			var near := Geometry2D.get_closest_point_to_segment(cursor, base, tip).distance_to(cursor)
+			if near < best and near <= (3.8 if item.forage == Forage.FLOWER else 3.0):
+				closest = item
+				best = near
+			continue
 		var radius := 10.0 if item.twig else 7.0
-		if cursor.distance_to(to_screen(item.point)) <= radius:
-			return item
-	return null
+		var distance := cursor.distance_to(to_screen(item.point))
+		if distance <= radius and distance < best:
+			closest = item
+			best = distance
+	return closest
+
+func decoration_host(cursor: Vector2) -> Pool.Piece:
+	var best: Pool.Piece
+	var distance := INF
+	for group in [model.wall, lower.wall]:
+		for piece: Pool.Piece in group:
+			var offset := cursor - piece_screen(piece)
+			var score := Vector2(offset.x, offset.y * 1.25).length()
+			if score < distance and score <= piece.radius * 0.84:
+				best = piece
+				distance = score
+	return best
+
+func can_place_floater(item: Floater, cursor: Vector2) -> bool:
+	if not Rect2(Vector2.ZERO, SIZE).has_point(cursor):
+		return false
+	if hearth.contains(cursor):
+		return can_fuel_hearth(item)
+	if item.forage == Forage.THIN_BRANCH and not on_bank(cursor):
+		return not blocked_at(model, from_screen(cursor), 1.0) and not blocked_at(lower, from_screen(cursor), 1.0)
+	return true
+
+func place_floater(item: Floater, cursor: Vector2) -> void:
+	if not can_place_floater(item, cursor):
+		return
+	if hearth.contains(cursor):
+		hearth.add(item.is_firewood())
+		floaters.erase(item)
+		return
+	item.point = from_screen(cursor)
+	item.rooted = false
+	item.host = null
+	var wet := is_wet(item.point)
+	item.planted = item.forage == Forage.THIN_BRANCH and not on_bank(cursor)
+	item.age = 0.0
+	if item.forage in [Forage.FLOWER, Forage.FOXTAIL]:
+		item.host = decoration_host(cursor)
+		if item.host != null:
+			item.host_offset = cursor - piece_screen(item.host)
+	item.afloat = wet and item.host == null and not item.planted
+	item.drift = Vector2.ZERO
+	item.caught = false
+	if item.ambient:
+		item.ambient = false
+		item.shore = Vector2(57.0, 60.0)
+	if wet and item.host == null and not item.planted:
+		burst(item.point, 0.15)
+
+func can_fuel_hearth(item: Floater) -> bool:
+	return (item.is_firewood() or item.forage == Forage.DRY_GRASS) and item.soaked < 0.35 and (
+		not item.afloat and (not item.planted or not is_wet(item.point))) and hearth.can_add(item.is_firewood())
+
+func ignite_hearth(point: Vector2) -> bool:
+	if hearth.contains(point) and hearth.can_ignite():
+		hearth.ignite()
+		return true
+	return false
 
 func blocked_at(basin: Pool, at: Vector2, clearance: float) -> bool:
 	for piece in basin.wall:
@@ -431,6 +538,18 @@ func advance_floaters(dt: float) -> void:
 					break
 	for i in range(floaters.size() - 1, -1, -1):
 		var item := floaters[i]
+		if item.is_firewood() or item.forage == Forage.DRY_GRASS:
+			if item.afloat or (item.planted and is_wet(item.point)):
+				item.soaked = 1.0
+			else:
+				item.soaked = clampf(item.soaked + dt * (rain.intensity * 0.31 - 0.15), 0.0, 1.0)
+		if item.planted and item != held_floater:
+			item.age = minf(1.0, item.age + dt)
+		if item.host != null:
+			item.point = from_screen(forage_screen(item))
+			if not model.wall.has(item.host) and not lower.wall.has(item.host):
+				item.host = null
+				item.afloat = is_wet(item.point)
 		if item == held_floater or not item.afloat:
 			continue
 		item.age += dt
@@ -475,6 +594,7 @@ func sync_surface(dt: float) -> void:
 func advance(dt: float) -> void:
 	clock += dt
 	wind.advance(dt)
+	hearth.advance(dt, rain.intensity, wind)
 	advance_surge(dt)
 	advance_riffle(dt)
 	advance_floaters(dt)
@@ -517,6 +637,8 @@ func advance(dt: float) -> void:
 
 func refresh_insect_terrain() -> void:
 	ground_insects.rocks.clear()
+	if not summer.cicada_held:
+		ground_insects.add_rock(summer.cicada_position, Vector2(4.5, 3.0), GroundInsects.CLIMB_LIMIT + 1.0)
 	for ledge: Rect2 in ROCK_LEDGE_FEET:
 		ground_insects.add_rock(ledge.get_center(), ledge.size * 0.5, 8.0)
 	for pieces in [bank, model.wall, lower.wall, riffle]:
@@ -541,6 +663,8 @@ func insect_ripple(point: Vector2) -> void:
 	ripples.append(Vector4(point.x, point.y, 0.0, 0.15))
 
 func frog_clear(point: Vector2) -> bool:
+	if not summer.cicada_held and point.distance_to(summer.cicada_position) < 7.5:
+		return false
 	return point.distance_to(ground_insects.mole.position) >= GroundInsects.CLEARANCE and point.distance_to(ground_insects.mantis.position) >= 12.0 and (
 		summer.insect_state != Summer.Flight.PERCHED or point.distance_to(summer.insect_position) >= 9.0)
 
@@ -550,16 +674,20 @@ func on_frog_landed(point: Vector2) -> void:
 		burst(local, 0.31)
 
 func holding_animal() -> bool:
-	return ground_insects.held != null or summer.insect_held or summer.fish_held or frog.held
+	return ground_insects.held != null or summer.insect_held or summer.fish_held or frog.held or summer.cicada_held
 
 func cancel_animal_grab() -> void:
 	ground_insects.held = null
 	summer.insect_held = false
 	summer.fish_held = false
 	frog.held = false
+	summer.cicada_held = false
 
 func grab_animal(point: Vector2) -> bool:
 	if ground_insects.grab(point):
+		return true
+	if summer.cicada_position.distance_to(point) <= 5.5:
+		summer.cicada_held = true
 		return true
 	summer.insect_held = summer.insect_position.distance_to(point) <= 9.0
 	if summer.insect_held:
@@ -574,6 +702,10 @@ func can_place_animal(point: Vector2) -> bool:
 	if not Rect2(Vector2(2, 2), SIZE - Vector2(4, 4)).has_point(point):
 		return false
 	if not frog.held and point.distance_to(frog.position) < GroundInsects.CLEARANCE:
+		return false
+	if not summer.cicada_held and point.distance_to(summer.cicada_position) < 6.0:
+		return false
+	if summer.cicada_held and summer.insect_state == Summer.Flight.PERCHED and point.distance_to(summer.insect_position) < 8.0:
 		return false
 	if frog.held or summer.fish_held:
 		return frog_clear(point)
@@ -593,6 +725,8 @@ func place_animal(point: Vector2) -> void:
 		return
 	elif summer.fish_held:
 		summer.place_fish(local, wet and water.depth_at(local) >= 0.13)
+	elif summer.cicada_held:
+		summer.cicada_position = point
 	elif ground_insects.held != null:
 		var side := -1.0 if local.y < 0.0 else 1.0
 		var bank := to_screen(Vector2(local.x, side * 48.0)).clamp(Vector2(9, 9), SIZE - Vector2(9, 9))
@@ -619,6 +753,12 @@ func _draw() -> void:
 	draw_shore_bubbles()
 	rain.draw_puddles(self)
 	summer.draw_land(self)
+	var hearth_hover := hearth.contains(pointer) and (hearth.can_ignite() if held_floater == null else can_fuel_hearth(held_floater))
+	hearth.draw_bed(self, hearth_hover)
+	hearth.draw_fuel(self)
+	for stone in hearth_rim:
+		var reflection := hearth.firelight * (1.0 - smoothstep(5.0, 16.0, stone.point.length()))
+		draw_rock(stone, Hearth.CENTER + stone.point, 0.0, maxf(hearth.dampness * 0.5, rain.wetness * 0.24), 0.0, true, 0.83, reflection)
 	ground_insects.draw(self, pointer, true)
 	draw_materials()
 	draw_pipes()
@@ -630,8 +770,10 @@ func _draw() -> void:
 	draw_floaters()
 	ground_insects.draw(self, pointer, false)
 	summer.draw_insect(self, pointer)
+	summer.draw_cicada(self, pointer)
 	summer.draw_fish(self, to_screen, pointer, true)
 	frog.draw(self, pointer)
+	hearth.draw_flame(self)
 	rain.draw_drops(self)
 	if holding_animal():
 		draw_drop_hint()
@@ -905,6 +1047,9 @@ func draw_brackets(p: Vector2, radius: float) -> void:
 func draw_floaters() -> void:
 	for item in floaters:
 		var carried := item == held_floater
+		if item.forage != Forage.NONE:
+			draw_forage(item, carried)
+			continue
 		var point := (pointer - Vector2(0, 3)) if carried else to_screen(item.point)
 		if item.afloat and not carried and item.drift.length_squared() > 4.0 and not item.caught:
 			var axis := Vector2.from_angle(item.angle)
@@ -928,6 +1073,126 @@ func draw_floaters() -> void:
 			draw_line((point - Vector2(3, 0).rotated(item.angle)).round(), (point + Vector2(4, 0).rotated(item.angle)).round(), Color("#cad26e"), 1.0)
 		if item == hovered_floater and held_floater == null:
 			draw_brackets(point, 7.0)
+	if held_floater != null and (held_floater.forage != Forage.NONE or hearth.contains(pointer)):
+		draw_drop_hint()
+
+func forage_screen(item: Floater) -> Vector2:
+	return piece_screen(item.host) + item.host_offset if item.host != null else to_screen(item.point)
+
+func forage_axis(item: Floater) -> Vector2:
+	if item.forage == Forage.DRY_GRASS:
+		return Vector2.from_angle(item.angle) * 9.0
+	var length := 8.0 if item.forage == Forage.FLOWER else (14.0 if item.forage == Forage.FOXTAIL else 21.0)
+	if item.planted and item != held_floater:
+		var lean := lerpf(3.0, 5.2, smoothstep(6.0, 45.0, water.velocity_at(item.point).x))
+		return Vector2(lean, -24.0)
+	if item.afloat or (item.forage == Forage.THIN_BRANCH and not item.planted and item != held_floater):
+		return Vector2.from_angle(item.angle) * length
+	var light := wind.flutter(roundi(item.shore.x) + 41) * (0.55 if item.forage == Forage.THIN_BRANCH else 1.25)
+	if item != held_floater and not item.rooted and not item.planted and item.host == null:
+		return Vector2.from_angle(item.angle) * length
+	return Vector2(2.0 + light, -length)
+
+func draw_forage(item: Floater, carried: bool) -> void:
+	var base := snap_pixel(pointer + Vector2(0, 2) if carried else forage_screen(item))
+	var axis := forage_axis(item) if not carried else Vector2(2, -forage_axis(item).length())
+	var tip := snap_pixel(base + axis)
+	if item.planted and not carried:
+		draw_planted_branch(item, base, axis)
+	elif item.forage == Forage.DRY_GRASS:
+		var direction := axis.normalized()
+		var side := direction.orthogonal()
+		for i in 6:
+			var spread := float(i) - 2.5
+			var strand := snap_pixel(base + direction * (6.2 + i % 3) + side * spread * 0.79)
+			var joint := snap_pixel(base + direction * 4.0 + side * spread * 0.29)
+			var straw := item.tint.darkened(item.soaked * 0.30 + (0.13 if i % 2 == 0 else 0.0))
+			draw_polyline(PackedVector2Array([base, joint, strand]), straw, 0.5)
+		draw_line(base, snap_pixel(base + direction * 2.6), Color("#63523a"), 1.0)
+	elif item.forage == Forage.THIN_BRANCH:
+		var joint := snap_pixel((base + tip) * 0.5 - Vector2(0.5, 0))
+		draw_polyline(PackedVector2Array([base, joint, tip]), Color("#4f3e32"), 1.4)
+		draw_polyline(PackedVector2Array([base + Vector2(0.5, 0), joint, tip]), item.tint, 0.65)
+		var twig_tip := snap_pixel(joint + axis * 0.24 + axis.normalized().orthogonal() * 2.8)
+		draw_line(joint, twig_tip, item.tint.darkened(0.15), 0.65)
+	else:
+		var along := axis.normalized()
+		var side := along.orthogonal()
+		var joint := snap_pixel(base.lerp(tip, 0.50) - side * 0.7)
+		draw_polyline(PackedVector2Array([base, joint, tip]), Color("#71814b"), 0.75)
+		draw_line(joint, snap_pixel(joint + along * 1.7 + side * 2.2), Color("#8e9b58"), 0.75)
+		if item.forage == Forage.FOXTAIL:
+			var seed_start := snap_pixel(tip - along * 4.4)
+			draw_line(seed_start, tip, item.tint.darkened(0.33), 2.5)
+			draw_line(snap_pixel(seed_start - side * 0.4), snap_pixel(tip - side * 0.4), item.tint, 1.5)
+			draw_line(snap_pixel(tip - along - side), snap_pixel(seed_start + along - side), item.tint.lightened(0.19), 0.5)
+		else:
+			for offset in [Vector2(-2, -0.5), Vector2(0, -2), Vector2(1.5, -0.5), Vector2(0.5, 1.1), Vector2(-1.2, 1)]:
+				var pixel := snap_pixel(tip + offset)
+				draw_rect(Rect2(pixel, Vector2(1.5, 1.5)), item.tint.darkened(0.17) if offset.y > 0.0 else item.tint)
+			draw_rect(Rect2(tip - Vector2(0.25, 0.25), Vector2.ONE), Color("#bd8952"))
+			draw_rect(Rect2(tip - Vector2(0.5, 0.5), Vector2(0.5, 0.5)), Color("#f0d29c"))
+	if item == hovered_floater and held_floater == null:
+		draw_brackets(snap_pixel(base.lerp(tip, 0.72)), 4.0)
+
+func draw_planted_branch(item: Floater, bed: Vector2, axis: Vector2) -> void:
+	var wet := is_wet(item.point)
+	var depth := water.depth_at(item.point) if wet else 0.0
+	var direction := axis.normalized()
+	var across := Vector2(-direction.y, direction.x)
+	var height := minf(16.0, depth * 19.0)
+	var seat := (1.0 - smoothstep(0.0, 0.21, item.age)) * 3.0
+	var tip := snap_pixel(bed + axis - Vector2(0, seat))
+	var waterline := snap_pixel(bed + direction * height)
+	var bend := snap_pixel(waterline.lerp(tip, 0.48) - Vector2(0.9, 0))
+	var fork := snap_pixel(bend + direction * 6.3 + across * 4.5)
+	var ink := Color("#44362d")
+
+	# The shadow is projected on the gravel. The wood's waterline follows local depth.
+	var visibility := 1.0 - smoothstep(0.24, 0.95, depth)
+	var shadow := snap_pixel(bed + Vector2(9.5, 4.0))
+	draw_line(bed, shadow, Color(Color("#273831"), 0.48 * visibility), 1.4)
+	draw_line(bed, snap_pixel(bed + Vector2(4.0, 1.0)), Color(Color("#243a32"), 0.42 * visibility), 1.5)
+	if wet:
+		var cell := water.cell_at(item.point)
+		var clarity := lerpf(0.22, 1.0, visibility) * (1.0 - water.silt_at(cell.x, cell.y) * 0.78)
+		var refracted := snap_pixel(bed + Vector2(0.5 + depth * 0.95, 0))
+		draw_line(refracted, waterline, Color(Color("#36534b"), 0.77 * clarity), 2.0)
+		draw_line(refracted - Vector2(0.5, 0), waterline, Color(Color("#738877"), 0.54 * clarity), 0.5)
+		draw_branch_contact(item, waterline)
+
+	var collar := snap_pixel(waterline.lerp(bend, 0.39))
+	draw_colored_polygon(PackedVector2Array([
+		snap_pixel(waterline - across * 1.35), snap_pixel(bend - across * 1.02), snap_pixel(tip - across * 0.45),
+		snap_pixel(tip + across * 0.36), snap_pixel(bend + across * 0.72), snap_pixel(waterline + across * 1.17),
+	]), ink)
+	draw_polyline(PackedVector2Array([
+		snap_pixel(waterline - across * 0.52), snap_pixel(bend - across * 0.46), tip
+	]), item.tint.lightened(0.15), 0.75)
+	draw_line(snap_pixel(collar + across * 0.34), snap_pixel(bend + across * 0.30), item.tint.darkened(0.28), 0.5)
+	draw_line(bend, fork, ink, 1.25)
+	draw_line(snap_pixel(bend + direction * 0.65), fork, item.tint, 0.5)
+	if wet:
+		draw_line(snap_pixel(waterline - across * 1.3), snap_pixel(waterline + across * 1.3), Color(Color("#b2d4bd"), 0.76), 0.75)
+
+func draw_branch_contact(item: Floater, at: Vector2) -> void:
+	var velocity := water.velocity_at(item.point)
+	var flow := Vector2(velocity.x, velocity.y * 0.62)
+	var down := Vector2.RIGHT if flow.length_squared() < 4.0 else flow.normalized()
+	var side := down.orthogonal()
+	var push := smoothstep(1.0, 30.0, flow.length())
+	var insertion := 1.0 - smoothstep(0.10, 0.55, item.age)
+	var ring := 2.5 + smoothstep(0.0, 0.55, item.age) * 4.8
+	if insertion > 0.0:
+		draw_arc(at, ring, 0.12, TAU - 0.12, 14, Color(FOAM, insertion * 0.56), 0.5)
+	for edge: float in [-1.0, 1.0]:
+		var shoulder := snap_pixel(at - down * 0.65 + side * edge * 1.65)
+		var slide := snap_pixel(at + down * 1.8 + side * edge * 2.2)
+		draw_polyline(PackedVector2Array([snap_pixel(at - down * 1.6), shoulder, slide]), Color(FOAM, 0.54 + push * 0.25), 0.5)
+		var phase := fposmod(clock * (1.15 + push * 1.1) + edge * 0.16, 1.0)
+		var wake := at + down * (2.3 + phase * 5.5) + side * edge * (2.1 + phase * 1.7)
+		draw_line(snap_pixel(wake), snap_pixel(wake + down * 2.2 + side * edge * 0.65),
+			Color(FOAM, (1.0 - phase) * (0.22 + push * 0.39)), 0.5)
 
 func snap_pixel(point: Vector2) -> Vector2:
 	return (point * 2.0).round() * 0.5
@@ -996,7 +1261,8 @@ func draw_piece(piece: Pool.Piece, p: Vector2, roll: float, damp := 0.0, submers
 	if submersion > 0.13:
 		draw_stone_waterline(shape, p.y + r * (0.51 - submersion * 0.69))
 
-func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersion: float, seated: bool, squash: float) -> void:
+func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersion: float, seated: bool, squash: float,
+		firelight := 0.0) -> void:
 	var r := piece.radius
 	p = snap_pixel(p)
 	if seated:
@@ -1012,6 +1278,7 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	var origin := -size * 0.25
 	var sunlight := smoothstep(0.18, 0.77, p.x / SIZE.x + (1.0 - p.y / SIZE.y) * 0.34)
 	var dry := Color("#c3cdd2").lerp(Color("#fff6e5"), sunlight)
+	dry *= Color(1.0 + firelight * 0.14, 1.0 + firelight * 0.038, 1.0 - firelight * 0.11)
 	var wet := dry * Color("#779997")
 	var water_row := clampi(roundi((r * (0.71 - submersion * 0.92) - origin.y) * 2.0), 0, int(size.y))
 	draw_set_transform(p, roll, Vector2(1.0, squash))

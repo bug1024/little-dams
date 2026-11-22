@@ -251,7 +251,9 @@ func _process(delta: float) -> void:
 	var pointer := stage_pointer(get_global_mouse_position())
 	update_grab(pointer)
 	scene.hovered = find_piece(pointer)
-	scene.hovered_floater = null if scene.hovered != null else scene.floater_at(pointer)
+	scene.hovered_floater = scene.floater_at(pointer)
+	if scene.hovered != null and scene.hovered_floater != null and scene.hovered_floater.forage == View.Forage.NONE:
+		scene.hovered_floater = null
 	gate.disabled = model.wall.is_empty() and lower.wall.is_empty()
 	var fade := maxf(0.001, smoothstep(0.0, 1.3, scene.clock))
 	music.volume_db = -20.0 + linear_to_db(fade)
@@ -318,6 +320,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 			update_grab(point)
 			return
+		if scene.ignite_hearth(point):
+			return
+		var forage := scene.floater_at(point)
+		if forage != null and forage.forage != View.Forage.NONE:
+			begin_floater_grab(forage, point)
+			return
 		held = find_piece(point)
 		if held == gate_plug:
 			held = null
@@ -328,11 +336,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 			update_grab(point)
 		else:
-			held_floater = scene.floater_at(point)
-			if held_floater != null:
-				scene.held_floater = held_floater
-				Input.set_default_cursor_shape(Input.CURSOR_DRAG)
-				update_grab(point)
+			if forage != null:
+				begin_floater_grab(forage, point)
 		return
 	if held_pipe != null:
 		var host := pipe_host_at(point)
@@ -352,17 +357,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		cancel_grab()
 		return
 	if held_floater != null:
-		if Rect2(Vector2.ZERO, View.SIZE).has_point(point):
-			var target := scene.from_screen(point)
-			held_floater.afloat = scene.is_wet(target)
-			held_floater.point = target
-			held_floater.drift = Vector2.ZERO
-			held_floater.caught = false
-			if held_floater.ambient:
-				held_floater.ambient = false
-				held_floater.shore = Vector2(57.0, 60.0)
-			if held_floater.afloat:
-				scene.burst(target, 0.15)
+		scene.place_floater(held_floater, point)
 		cancel_grab()
 		return
 	if held == null:
@@ -435,6 +430,12 @@ func drop_point(cursor: Vector2, support: Pool.Piece) -> Vector2:
 func stage_pointer(point: Vector2) -> Vector2:
 	return point / SCALE
 
+func begin_floater_grab(item: View.Floater, point: Vector2) -> void:
+	held_floater = item
+	scene.held_floater = item
+	Input.set_default_cursor_shape(Input.CURSOR_DRAG)
+	update_grab(point)
+
 func update_grab(point: Vector2) -> void:
 	scene.pointer = point
 	if held_pipe != null:
@@ -442,6 +443,9 @@ func update_grab(point: Vector2) -> void:
 		return
 	if scene.holding_animal():
 		scene.clear_drop = scene.can_place_animal(point)
+		return
+	if held_floater != null:
+		scene.clear_drop = scene.can_place_floater(held_floater, point)
 		return
 	if held == null:
 		return

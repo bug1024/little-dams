@@ -2,6 +2,7 @@ extends RefCounted
 
 const Flow = preload("res://game/one_dam_grid.gd")
 const Wind = preload("res://game/one_dam_wind.gd")
+const CICADA_PERCH := Vector2(148.5, 64.0)
 signal fish_surface(point: Vector2)
 
 const SEDGES := [
@@ -36,6 +37,8 @@ var next_perch := 1
 var insect_position := Vector2(25.0, 113.0)
 var insect_held := false
 var temporary_perch := false
+var cicada_position := CICADA_PERCH
+var cicada_held := false
 var flight_origin := Vector2.ZERO
 var hover_point := Vector2.ZERO
 var surface_impulse := 0.0
@@ -225,12 +228,8 @@ func draw_land(canvas: Node2D) -> void:
 			canvas.draw_line(split, tip, ink, 0.5)
 			var blade := split.lerp(tip, 0.53)
 			canvas.draw_line(blade, blade + Vector2(1.0 + sway * 0.6, -1.1), ink.lightened(0.11), 0.5)
-			if data.z >= 5.0 and stem == (3 if i % 2 == 0 else 1):
-				var axis := (tip - split).normalized()
-				var seed_head := tip + axis * 1.4
-				canvas.draw_line(tip, seed_head, Color("#8b874b"), 1.5)
-				canvas.draw_line(tip + Vector2(-0.5, 0), seed_head + Vector2(-0.5, -0.5), Color("#b5a26a"), 0.5)
 
+	draw_cicada_leaf(canvas)
 	for leaf in [Vector3(58, 155, -0.7), Vector3(60.5, 154, 0.6), Vector3(59, 157, 2.9),
 			Vector3(187, 151, 0.4), Vector3(196, 46, -1.7), Vector3(109, 169, 2.8)]:
 		draw_litter_leaf(canvas, Vector2(leaf.x, leaf.y), leaf.z, Color("#96744a"))
@@ -255,6 +254,40 @@ func draw_litter_leaf(canvas: Node2D, at: Vector2, turn: float, ink: Color) -> v
 		shape[i] = (at * 2.0 + shape[i].rotated(turn) * 2.0).round() * 0.5
 	canvas.draw_colored_polygon(shape, ink)
 	canvas.draw_line(at, at + Vector2(1.7, -0.4).rotated(turn), ink.darkened(0.26), 0.5)
+
+func draw_cicada_leaf(canvas: Node2D) -> void:
+	var p := CICADA_PERCH
+	canvas.draw_line(p + Vector2(6, 1), p + Vector2(8.0, 4.0), Color("#59653a"), 0.75)
+	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-8.5, -2.5), p + Vector2(-4.5, -4.0),
+		p + Vector2(0.5, -4.5), p + Vector2(5.0, -3.0), p + Vector2(7, 1.0),
+		p + Vector2(4.5, 3.0), p + Vector2(-1.0, 2.5), p + Vector2(-6.5, 0.0)]), Color("#374932"))
+	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-8.0, -2.5), p + Vector2(-3.5, -3.5),
+		p + Vector2(0.5, -4.0), p + Vector2(4.5, -2.5), p + Vector2(6.0, 0.5),
+		p + Vector2(3.5, 2.0), p + Vector2(-1.0, 2.0), p + Vector2(-5.5, -0.5)]), Color("#61754a"))
+	canvas.draw_line(p + Vector2(-6.0, -2.0), p + Vector2(5.5, 0.5), Color("#7d895a"), 0.5)
+	for x: float in [-3.5, 0.0, 3.0]:
+		var rib := p + Vector2(x, x * 0.20 - 0.65)
+		canvas.draw_line(rib, rib + Vector2(-1.5, -1.7), Color("#788857"), 0.5)
+		canvas.draw_line(rib, rib + Vector2(0.4, 1.45), Color("#4e6742"), 0.5)
+
+func draw_cicada(canvas: Node2D, pointer: Vector2) -> void:
+	var at := pointer - Vector2(0, 5) if cicada_held else cicada_position
+	var p := (at * 2.0).round() * 0.5
+	if not cicada_held:
+		canvas.draw_line(p + Vector2(-2.0, 0.5), p + Vector2(3.5, 1.5), Color("#253e327d"), 2.0)
+	for i in 3:
+		var joint := p + Vector2(-2.0 + i * 1.5, i * 0.28)
+		canvas.draw_line(joint, joint + Vector2(-0.75, 1.5), Color("#3f5636"), 0.55)
+		canvas.draw_line(joint, joint + Vector2(-0.6, -1.3), Color("#49653d"), 0.55)
+	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-3.5, -1.5), p + Vector2(-2.0, -2.1),
+		p + Vector2(1.0, -1.5), p + Vector2(4.0, 0.9), p + Vector2(2.9, 1.7), p + Vector2(-2.9, 0.5)]), Color("#2b4432"))
+	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-2.0, -1.7), p + Vector2(0.0, -1.3),
+		p + Vector2(3.4, 1.0), p + Vector2(1.7, 0.93), p + Vector2(-1.3, 0.1)]), Color("#96af68"))
+	canvas.draw_line(p + Vector2(-1.5, -1.15), p + Vector2(2.9, 0.9), Color("#c1c88b"), 0.5)
+	canvas.draw_line(p + Vector2(-2.0, -0.2), p + Vector2(2.1, 1.1), Color("#708e54"), 0.5)
+	canvas.draw_rect(Rect2(p + Vector2(-3.5, -1.75), Vector2(2.0, 2.0)), Color("#8da85b"))
+	canvas.draw_rect(Rect2(p + Vector2(-3.75, -1.75), Vector2(0.75, 0.75)), Color("#26362c"))
+	canvas.draw_rect(Rect2(p + Vector2(-3.25, 0), Vector2(0.75, 0.5)), Color("#304532"))
 
 func draw_insect(canvas: Node2D, pointer: Vector2) -> void:
 	var point := pointer - Vector2(0, 5) if insect_held else insect_position
