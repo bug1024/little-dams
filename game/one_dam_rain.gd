@@ -37,7 +37,7 @@ func clear() -> void:
 
 func advance(dt: float) -> void:
 	intensity = move_toward(intensity, 1.0 if enabled else 0.0, dt * (0.29 if enabled else 0.41))
-	runoff = lerpf(runoff, intensity, 1.0 - exp(-dt * (0.29 if intensity > runoff else 0.13)))
+	runoff = lerpf(runoff, intensity, 1.0 - exp(-dt * (0.49 if intensity > runoff else 0.23)))
 	wetness = clampf(wetness + (intensity * 0.23 - (0.022 + wetness * 0.036)) * dt, 0.0, 1.0)
 	for i in puddles.size():
 		puddles[i] = clampf(puddles[i] + (intensity * (0.13 + i * 0.012) - (0.028 + i * 0.003)) * dt, 0.0, 1.0)

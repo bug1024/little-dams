@@ -10,6 +10,7 @@ const BANK := Materials.BANK
 const DX := WIDTH / COLUMNS
 const DY := BANK * 2.0 / ROWS
 const STEP := 1.0 / 30.0
+const PIPE_CAPACITY := 0.54
 
 # Rates are in cell-volume units per second. All internal transfers use one face per pair.
 var inlet_rate := 1.85
@@ -32,6 +33,9 @@ var donor_scale := PackedFloat32Array()
 var seep_rate := PackedFloat32Array()
 var sediment := PackedFloat32Array()
 var concentration := PackedFloat32Array()
+var pipe_delta := PackedFloat32Array()
+var pipe_silt := PackedFloat32Array()
+var pipe_discharge := PackedFloat32Array()
 var last_input := 0.0
 var last_output := 0.0
 var last_seepage := 0.0
@@ -49,6 +53,9 @@ func _init() -> void:
 	seep_rate.resize(COUNT)
 	sediment.resize(COUNT)
 	concentration.resize(COUNT)
+	pipe_delta.resize(COUNT)
+	pipe_silt.resize(COUNT)
+	pipe_discharge.resize(COLUMNS)
 	for y in ROWS:
 		var cross := pow(absf(row_y(y)) / BANK, 2.55) * 0.45
 		for x in COLUMNS:
@@ -80,6 +87,7 @@ func reset(dam_x: float, filled := true, stored_depth := 0.83) -> void:
 	south.fill(0.0)
 	sediment.fill(0.0)
 	concentration.fill(0.0)
+	pipe_discharge.fill(0.0)
 	last_input = 0.0
 	last_output = 0.0
 	last_seepage = 0.0
@@ -98,10 +106,10 @@ func stamp_piece(piece: Materials.Piece) -> void:
 	var soil := piece.kind == Materials.EARTH
 	var eroded := 1.0 - piece.wear * (0.54 if soil else 0.20)
 	var width := maxf(DX * 0.71, piece.radius * 0.51) * eroded
-	var span := piece.radius * (0.90 if soil else 0.77) * eroded
-	var packed_height := (0.56 if soil else 0.48) + piece.radius * (0.025 if soil else 0.044)
+	var span := piece.radius * (1.10 if soil else 0.77) * eroded
+	var packed_height := (0.69 if soil else 0.51) + piece.radius * (0.028 if soil else 0.048)
 	var height := (packed_height * eroded + piece.lift() * 0.044) * obstacle_height
-	var permeability := (0.009 if soil else 0.039) + piece.wear * (0.08 if soil else 0.04)
+	var permeability := (0.006 if soil else 0.034) + piece.wear * (0.08 if soil else 0.04)
 	var lo := cell_at(piece.point - Vector2(width + DX, span + DY))
 	var hi := cell_at(piece.point + Vector2(width + DX, span + DY))
 	for y in range(lo.y, hi.y + 1):
@@ -129,7 +137,9 @@ func face_rate(a: int, b: int, crest: float, permeability: float, dt: float) -> 
 	var open_water := maxf(0.0, mouth_depth - crest)
 	var opening := open_water + (mouth_depth - open_water) * permeability
 	var gap := absf(difference)
-	var rate := minf(mobility * opening * sqrt(gap), gap * (0.205 / dt))
+	# A deeper open reach carries the rising front faster than a shallow trickle.
+	var conveyance := 1.0 + 0.42 * smoothstep(0.23, 0.78, open_water) + 0.95 * smoothstep(0.72, 1.25, open_water)
+	var rate := minf(mobility * conveyance * opening * sqrt(gap), gap * (0.205 / dt))
 	return rate if difference >= 0.0 else -rate
 
 func tick(dt: float, upstream: Materials, downstream: Materials) -> void:
@@ -137,6 +147,10 @@ func tick(dt: float, upstream: Materials, downstream: Materials) -> void:
 	last_input = 0.0
 	last_output = 0.0
 	last_seepage = 0.0
+	pipe_delta.fill(0.0)
+	pipe_silt.fill(0.0)
+	pipe_discharge.fill(0.0)
+	var pipes := upstream.pipes + downstream.pipes
 
 	for y in ROWS:
 		for x in COLUMNS:
@@ -145,15 +159,26 @@ func tick(dt: float, upstream: Materials, downstream: Materials) -> void:
 				east[i] = face_rate(i, i + 1, crest_x[i], pass_x[i], dt)
 			else:
 				# Free outlet. It removes water only and shares the donor limiter.
-				east[i] = depth[i] * 1.22
+				east[i] = depth[i] * (1.22 + 0.64 * smoothstep(0.45, 0.90, depth[i]))
 			south[i] = face_rate(i, i + COLUMNS, crest_y[i], pass_y[i], dt) * cross_mobility if y + 1 < ROWS else 0.0
 			seep_rate[i] = smoothstep(0.30, 0.83, depth[i]) * bank_seepage
+			if y == 0 or y == ROWS - 1:
+				# Water high enough to reach the outer bank can spill into the adjacent ground.
+				seep_rate[i] += maxf(0.0, depth[i] - 0.52) * 0.75
 			concentration[i] = sediment[i] / maxf(depth[i], 0.00001)
+
+	for pipe in pipes:
+		var ends := pipe_ends(pipe)
+		var sill := bed[ends.x] + 0.24 + pipe.host.lift() * 0.044
+		var upstream_level := bed[ends.x] + depth[ends.x]
+		var head := upstream_level - maxf(sill, bed[ends.y] + depth[ends.y])
+		pipe.rate = minf(minf(PIPE_CAPACITY, 0.62 * sqrt(maxf(0.0, head))), maxf(0.0, upstream_level - sill) / dt)
+		pipe_delta[ends.x] -= pipe.rate
 
 	for y in ROWS:
 		for x in COLUMNS:
 			var i := index(x, y)
-			var send := maxf(0.0, east[i]) + maxf(0.0, south[i]) + seep_rate[i]
+			var send := maxf(0.0, east[i]) + maxf(0.0, south[i]) + seep_rate[i] - pipe_delta[i]
 			if x > 0:
 				send += maxf(0.0, -east[i - 1])
 			if y > 0:
@@ -161,17 +186,30 @@ func tick(dt: float, upstream: Materials, downstream: Materials) -> void:
 			# Simultaneous outgoing faces and seepage never spend the same volume twice.
 			donor_scale[i] = minf(1.0, depth[i] / maxf(send * dt, 0.00000001))
 
+	pipe_delta.fill(0.0)
+	for pipe in pipes:
+		var ends := pipe_ends(pipe)
+		pipe.rate *= donor_scale[ends.x]
+		var silt := pipe.rate * concentration[ends.x]
+		pipe_delta[ends.x] -= pipe.rate
+		pipe_delta[ends.y] += pipe.rate
+		pipe_silt[ends.x] -= silt
+		pipe_silt[ends.y] += silt
+		for x in range(ends.x % COLUMNS, ends.y % COLUMNS):
+			pipe_discharge[x] += pipe.rate
+
 	for y in ROWS:
 		for x in COLUMNS:
 			var i := index(x, y)
 			east[i] *= donor_scale[i if east[i] >= 0.0 else i + 1]
 			south[i] *= donor_scale[i if south[i] >= 0.0 else i + COLUMNS]
 
-	var local_rain := rain_runoff * 3.6 / COUNT
-	last_input += local_rain * COUNT * dt
 	for y in ROWS:
-		var incoming := (1.0 - absf(row_y(y)) / BANK) * (inlet_rate + rain_runoff * 2.65) / (ROWS * 0.5 + 0.5 / ROWS)
-		last_input += incoming * dt
+		var bank_fraction := absf(row_y(y)) / BANK
+		# Runoff reaches the whole creek from both banks before the headwater pulse arrives.
+		var bank_runoff := rain_runoff * (0.55 + bank_fraction * 1.10) * 10.8 / COUNT
+		var incoming := (1.0 - bank_fraction) * (inlet_rate + rain_runoff * 4.8) / (ROWS * 0.5 + 0.5 / ROWS)
+		last_input += (incoming + bank_runoff * COLUMNS) * dt
 		for x in COLUMNS:
 			var i := index(x, y)
 			var from_west := east[i - 1] if x > 0 else incoming
@@ -181,8 +219,8 @@ func tick(dt: float, upstream: Materials, downstream: Materials) -> void:
 			var north_silt := transported_sediment(i - COLUMNS, i, from_north) if y > 0 else 0.0
 			var east_silt := transported_sediment(i, i + 1, east[i])
 			var south_silt := transported_sediment(i, i + COLUMNS, south[i])
-			depth[i] = maxf(0.0, depth[i] + dt * (from_west + from_north - east[i] - south[i] - sink + local_rain))
-			var sediment_delta := west_silt + north_silt - east_silt - south_silt - sink * concentration[i]
+			depth[i] = maxf(0.0, depth[i] + dt * (from_west + from_north - east[i] - south[i] - sink + bank_runoff + pipe_delta[i]))
+			var sediment_delta := west_silt + north_silt - east_silt - south_silt - sink * concentration[i] + pipe_silt[i]
 			if rain_runoff > 0.0:
 				# Rain stirs fine sediment locally, while the upstream runoff also carries soil in.
 				sediment_delta += rain_runoff * 0.11 * maxf(0.0, depth[i] - sediment[i])
@@ -191,6 +229,12 @@ func tick(dt: float, upstream: Materials, downstream: Materials) -> void:
 			sediment[i] = clampf((sediment[i] + sediment_delta * dt) * (1.0 - 0.16 * dt), 0.0, depth[i])
 			last_seepage += sink * dt
 		last_output += east[index(COLUMNS - 1, y)] * dt
+
+func pipe_ends(pipe: Materials.DrainPipe) -> Vector2i:
+	var span := Vector2(pipe.reach(), 0.0)
+	var intake := cell_at(pipe.position() - span)
+	var outlet := cell_at(pipe.position() + span)
+	return Vector2i(index(intake.x, intake.y), index(outlet.x, outlet.y))
 
 func volume() -> float:
 	var total := 0.0
@@ -214,7 +258,7 @@ func velocity_at(point: Vector2) -> Vector2:
 
 func discharge_at(x: float) -> float:
 	var column := cell_at(Vector2(x, 0)).x
-	var discharge := 0.0
+	var discharge := pipe_discharge[column]
 	for y in ROWS:
 		discharge += east[index(column, y)]
 	return discharge

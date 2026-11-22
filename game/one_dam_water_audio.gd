@@ -1,6 +1,6 @@
 extends RefCounted
 
-enum Cue { JET, CREST, SPLASH }
+enum Cue { SEEP, CREST, SPLASH }
 
 static func frog_call() -> AudioStreamWAV:
 	const RATE := 22050
@@ -62,7 +62,7 @@ static func quiet_rain() -> AudioStreamWAV:
 
 static func water_cue(cue: Cue) -> AudioStreamWAV:
 	var rate := 22050
-	var duration: float = [0.43, 0.98, 0.32][cue]
+	var duration: float = [0.43, 1.65, 0.32][cue]
 	var frames := roundi(duration * rate)
 	var samples := PackedByteArray()
 	samples.resize(frames * 2)
@@ -78,8 +78,10 @@ static func water_cue(cue: Cue) -> AudioStreamWAV:
 		body += (low - body) * 0.038
 		var bubbles := pow(maxf(0.0, sin(TAU * (time * 20.0 + time * time * 12.0))), 3.0)
 		var edge := low - body
-		var wave := smoothstep(0.0, 0.060 if cue == Cue.CREST else 0.016, t) * (1.0 - smoothstep(0.19, 1.0, t))
-		var sample := edge * (0.58 + bubbles * 0.60) + body * (2.6 if cue == Cue.CREST else 1.15)
+		var wave := smoothstep(0.0, 0.17 if cue == Cue.CREST else 0.016, t) * (1.0 - smoothstep(0.19, 1.0, t))
+		var sample := edge * (0.58 + bubbles * 0.60) + body * 1.15
+		if cue == Cue.CREST:
+			sample = body * (2.5 + sin(time * TAU * 3.1) * 0.34) + edge * (0.14 + bubbles * 0.16)
 		if cue == Cue.SPLASH:
 			var thump := sin(TAU * (84.0 * time - 53.0 * time * time)) * exp(-time * 22.0)
 			sample = sample * 0.74 + thump * 0.38

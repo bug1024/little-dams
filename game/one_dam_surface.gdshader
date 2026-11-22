@@ -20,7 +20,7 @@ const vec2 WIND = vec2(0.94, 0.34);
 float backed_water(float x, vec2 pond) {
 	float distance = pond.x - x;
 	return smoothstep(-0.016, 0.026, distance) * (1.0 - smoothstep(0.09, 0.31, distance))
-		* smoothstep(0.08, 0.63, pond.y);
+		* smoothstep(0.09, 0.60, pond.y);
 }
 
 vec2 flow_uv(vec2 uv) {
@@ -54,9 +54,12 @@ void fragment() {
 	float slow = 1.0 - smoothstep(0.055, 0.27, speed);
 	float silt = clamp(shore.a * 0.95 + bank * slow * smoothstep(0.36, 0.77, patches * 0.68 + veins * 0.44) * 0.55, 0.0, 1.0);
 	float shelf = gravel_shelf(flow_coord.y);
-	float waterline = depth - water_edge(shelf, patches);
-	vec2 bank_gradient = vec2(dFdx(waterline), dFdy(waterline));
+	float pool_extent = max(backed_water(art_uv.x, upper_pool), backed_water(art_uv.x, lower_pool));
+	float held_water = pool_extent * smoothstep(0.20, 0.62, depth);
 	float push = texture(surge_field, vec2(art_uv.x, 0.5)).r;
+	float rising_shelf = shelf * (held_water * 0.085 + push * smoothstep(0.07, 0.24, depth) * 0.068);
+	float waterline = depth - water_edge(shelf, patches) + rising_shelf;
+	vec2 bank_gradient = vec2(dFdx(waterline), dFdy(waterline));
 	vec2 motion = pixel - shore.gb;
 
 	float stone = clamp(dot(plate, vec3(0.52, 0.36, 0.12)) * 1.47, 0.04, 1.0);
@@ -76,9 +79,7 @@ void fragment() {
 	float moss = bank * damp * smoothstep(0.50, 0.79, patches + veins * 0.17 + shade * 0.15);
 	damp_gravel = mix(damp_gravel, vec3(0.20, 0.26, 0.14) * (0.79 + pebble * 0.48), moss * 0.75);
 
-	float deep = smoothstep(0.19, 0.67, depth);
-	float pool_extent = max(backed_water(art_uv.x, upper_pool), backed_water(art_uv.x, lower_pool));
-	float held_water = pool_extent * smoothstep(0.20, 0.62, depth);
+	float deep = smoothstep(0.19, 0.70, depth);
 	// Shift only the submerged plate. The ground and the water footprint keep their original UVs.
 	vec3 submerged_plate = plate;
 	float clarity = (1.0 - deep) * (1.0 - smoothstep(0.10, 0.53, state.a + silt * 0.20));
@@ -130,13 +131,15 @@ void fragment() {
 	ripple *= step(0.61, cos(motion.y * 0.38 + motion.x * 0.064));
 	water = mix(water, vec3(0.55, 0.79, 0.76), ripple * (0.058 + speed * 0.24) * (1.0 - held_water * 0.42));
 	float broken_crest = step(0.66, earth_patch(motion / vec2(12.0, 2.6)));
-	float live_crest = push * smoothstep(0.065, 0.38, speed);
-	water = mix(water, vec3(0.27, 0.51, 0.49), live_crest * 0.22);
-	water = mix(water, vec3(0.78, 0.90, 0.85), broken_crest * live_crest * 0.50);
+	float front = max(0.0, texture(surge_field, vec2(art_uv.x - 0.016, 0.5)).r -
+		texture(surge_field, vec2(art_uv.x + 0.016, 0.5)).r);
+	float live_crest = push * smoothstep(0.07, 0.34, depth);
+	water = mix(water, vec3(0.23, 0.43, 0.43), live_crest * 0.32);
+	water = mix(water, vec3(0.73, 0.84, 0.77), broken_crest * (live_crest * 0.13 + front * 0.28));
 	// Gravel shelves stay exposed in the open creek. As local depth rises, the
 	// contact line crosses the shelf, following the same contour as the water fill.
 	float cover = smoothstep(-0.025, 0.018, waterline);
-	cover = mix(cover, 1.0, push * smoothstep(0.040, 0.15, depth) * 0.52);
+	cover = mix(cover, 1.0, push * smoothstep(0.055, 0.19, depth) * 0.38);
 	// Convert depth-to-shore into screen pixels so the foam stays thin as the bank slope changes.
 	float bank_dist = min(waterline / max(length(bank_gradient), 0.002), channel.g * 50.0);
 	float shore_motion = sin(motion.x * 0.12 + motion.y * 0.29 - creek_time * 1.8);

@@ -19,6 +19,7 @@ func run() -> void:
 	game.set_process(false)
 	check_bank_drops()
 	check_free_build()
+	check_drain_pipe()
 	check_breaches()
 	check_repeated_release()
 	check_downstream()
@@ -140,6 +141,43 @@ func check_free_build() -> void:
 	expect(game.model.wall.is_empty() and game.lower.wall.is_empty() and game.gate.disabled
 		and is_equal_approx(game.water.pool_head(148.0), starting_head), "Restart removes the player's dam and its pool")
 
+func check_drain_pipe() -> void:
+	game.restart()
+	var view := game.scene
+	var pipe := view.pipes[0]
+	expect(view.on_bank(view.pipe_screen(pipe)), "A discarded pipe starts within reach on the bank")
+	var rock := put(game.model, Vector2(148, -16), 9.0, Materials.STONE)
+	var mud := put(game.model, Vector2(148, 0), 8.0, Materials.EARTH)
+	pointer_button(view.pipe_screen(pipe), true)
+	pointer_button(view.piece_screen(rock), false)
+	expect(pipe.host == null, "A loose pipe cannot be inserted into stone")
+	pointer_button(view.pipe_screen(pipe), true)
+	pointer_button(view.piece_screen(mud), false)
+	expect(pipe.host == mud and game.model.pipes.has(pipe), "Dragging the pipe into mud installs a drain")
+	if not game.model.pipes.has(pipe):
+		return
+	game.water.reset(148.0, false)
+	game.water.tick(Flow.STEP, game.model, game.lower)
+	expect(is_zero_approx(pipe.rate), "A drain above the shallow creek stays dry")
+	game.water.reset(148.0, true, 0.98)
+	var volume := game.water.volume()
+	var budget := step_grid(game.water, game.model, game.lower, 10)
+	var rate := pipe.rate
+	expect(rate > 0.35 and absf(game.water.volume() - volume - budget) < 0.002,
+		"An installed pipe carries a visible flow and conserves volume (rate %.2f)" % rate)
+	var downstream := game.water.pipe_ends(pipe).y
+	expect(game.water.pipe_delta[downstream] > 0.0, "Pipe outflow lands downstream of its mud plug")
+	pointer_button(view.pipe_screen(pipe) + Vector2(pipe.reach(), 0), true)
+	pointer_button(Vector2(114, 169), false)
+	expect(pipe.host == null and game.model.pipes.is_empty() and pipe.rate == 0.0,
+		"Pulling a pipe onto the bank stops its drainage")
+	pointer_button(view.pipe_screen(pipe), true)
+	pointer_button(view.piece_screen(mud), false)
+	game.model.remove(mud, 0.8)
+	expect(pipe.host == null and game.model.pipes.is_empty() and view.pipes.has(pipe),
+		"The pipe becomes loose and reusable when its mud plug breaks")
+	game.restart()
+
 func seed_test_dam(filled := true) -> void:
 	# Stable physical fixture for release comparisons, independent of the free-build startup.
 	for row in [
@@ -169,6 +207,8 @@ func check_breaches() -> void:
 	expect(high.head_drop > 0.32 and high.initial_jet > 0.15 and high.pilot_width > 1.0 and high.pilot_width < high.full_width * 0.48,
 		"A backed-up pool first flows through a small slit, then opens to a wider crest")
 	expect(high.outlet_gain > 0.22 and high.downstream_surge > 0.32, "Measured flood reaches downstream beyond the gate")
+	expect(high.drawdown > 0.13 and high.downstream_rise > 0.03 and high.downstream_rise > low.downstream_rise + 0.025,
+		"A full release drains the pool and raises the water downstream (%.3f / %.3f)" % [high.drawdown, high.downstream_rise])
 
 func check_repeated_release() -> void:
 	game.restart()
@@ -192,6 +232,8 @@ func release_case(shallow: bool, at_bank: bool) -> Dictionary:
 	var count := game.model.wall.size()
 	var head_drop := game.scene.pool_profile(game.model, 146.0).y
 	var baseline := game.water.discharge_at(205.0)
+	var stored_depth := game.water.pool_head(148.0)
+	var tail_depth := game.water.channel_depth(205.0)
 	var base_jet := game.water.gap_flow(Vector2(148, 0))
 	if at_bank:
 		game.model.remove(game.model.wall[0], 1.2)
@@ -204,6 +246,8 @@ func release_case(shallow: bool, at_bank: bool) -> Dictionary:
 	var initial_jet := 0.0
 	var outlet_gain := 0.0
 	var downstream_surge := 0.0
+	var drawdown := 0.0
+	var downstream_rise := 0.0
 	for frame in 450:
 		game._process(1.0 / 60.0)
 		if game.upper_breach.phase != phases[-1]:
@@ -215,6 +259,8 @@ func release_case(shallow: bool, at_bank: bool) -> Dictionary:
 			full_width = maxf(full_width, game.upper_breach.mouth_width)
 		outlet_gain = maxf(outlet_gain, game.water.discharge_at(205.0) - baseline)
 		downstream_surge = maxf(downstream_surge, game.scene.surge_at(205.0))
+		drawdown = maxf(drawdown, stored_depth - game.water.pool_head(148.0))
+		downstream_rise = maxf(downstream_rise, game.water.channel_depth(205.0) - tail_depth)
 		var column := game.water.cell_at(Vector2(168, 0)).x
 		for lane in Flow.ROWS:
 			peak_silt = maxf(peak_silt, game.water.silt_at(column, lane))
@@ -226,6 +272,7 @@ func release_case(shallow: bool, at_bank: bool) -> Dictionary:
 		"head_drop": head_drop, "initial_jet": initial_jet,
 		"pilot_width": pilot_width, "full_width": full_width,
 		"outlet_gain": outlet_gain, "downstream_surge": downstream_surge,
+		"drawdown": drawdown, "downstream_rise": downstream_rise,
 	}
 
 func check_downstream() -> void:
@@ -277,29 +324,41 @@ func check_support_loss() -> void:
 func check_floater_release() -> void:
 	game.restart()
 	seed_test_dam()
+	game.scene.wind.next_gust = INF
+	game.scene.wind.gust = 0.0
+	game.scene.wind.target = 0.0
+	game.scene.wind.history.fill(game.scene.wind.CALM)
 	frames(42)
 	var twig := game.scene.floaters[1]
 	twig.point = Vector2(129, 0)
 	twig.afloat = true
 	frames(126)
 	var held_x := twig.point.x
-	var caught := twig.caught
+	var held_back := held_x > 133.0 and held_x < 140.0
 	game.opening()
 	frames(120)
-	expect(caught and twig.point.x > held_x + 18.0 and game.scene.summer.surface_impulse > 0.0,
+	expect(held_back and twig.point.x > held_x + 18.0 and game.scene.summer.surface_impulse > 0.0,
 		"The flood frees a trapped twig and disturbs the downstream bank (travel %.1f)" % (twig.point.x - held_x))
+	game.scene.wind.next_gust = game.scene.wind.clock + 3.5
 
 func check_rain() -> void:
 	game.restart()
 	frames(330)
 	var without_rain := game.water.discharge_at(151.0)
+	var dry_depth := game.water.channel_depth(151.0)
+	var shelf := Vector2(235.0, -26.0)
+	var dry_shelf := game.water.depth_at(shelf)
 	game.toggle_rain()
 	frames(30)
 	expect(game.scene.rain.intensity > 0.0 and game.scene.rain.intensity < 0.5, "Rain builds up after the toggle")
-	frames(720)
+	frames(300)
+	expect(game.water.channel_depth(151.0) > dry_depth + 0.065 and game.water.depth_at(shelf) > dry_shelf + 0.075,
+		"Rain raises the channel and wets a downstream shelf within six seconds")
+	frames(420)
 	var storm_discharge := game.water.discharge_at(151.0)
 	var storm_silt := game.water.silt_at(30, 8)
-	expect(storm_discharge > without_rain + 0.5 and storm_silt > 0.12 and game.scene.rain.puddles[3] > 0.5,
+	expect(storm_discharge > without_rain + 1.0 and game.water.channel_depth(151.0) > dry_depth + 0.25
+		and storm_silt > 0.12 and game.scene.rain.puddles[3] > 0.5,
 		"Rain increases flow and sediment and fills low ground (discharge %.2f -> %.2f)" % [without_rain, storm_discharge])
 	var volume := game.water.volume()
 	var budget := step_grid(game.water, game.model, game.lower, 20)
@@ -312,6 +371,9 @@ func check_rain() -> void:
 	frames(840)
 	expect(game.water.rain_runoff < 0.13 and game.water.silt_at(30, 8) < storm_silt
 		and game.scene.rain.puddles[3] < 0.65, "Runoff, suspended sediment and puddles recede after rain")
+	var draining_depth := game.water.channel_depth(151.0)
+	frames(900)
+	expect(game.water.channel_depth(151.0) < draining_depth - 0.08, "Stored storm water drains after the rain")
 	game.restart()
 	expect(game.water.rain_runoff == 0.0 and game.scene.rain.wetness == 0.0
 		and game.scene.rain.drops.is_empty() and game.rain_button.text == "下雨", "Restart clears weather")

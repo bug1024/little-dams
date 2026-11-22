@@ -5,7 +5,6 @@ const Flow = preload("res://game/one_dam_grid.gd")
 enum Phase { READY, OPENING, JET, SURGE, AFTERMATH }
 
 signal crest(point: Vector2, strength: float)
-signal jet_started(strength: float)
 
 var phase := Phase.READY
 var origin := Vector2.ZERO
@@ -15,7 +14,6 @@ var base_jet := 0.0
 var base_flow := 0.0
 var peak := 0.0
 var strength := 0.0
-var direction := Vector2.RIGHT
 var prying := false
 var mouth_width := 1.0
 var pilot_limit := 1.0
@@ -41,7 +39,6 @@ func open(point: Vector2, flow: Flow, gate := false) -> void:
 	peak = 0.0
 	strength = 0.0
 	mouth_width = 1.0
-	direction = Vector2.RIGHT
 	transition(Phase.OPENING)
 
 func transition(next: Phase) -> void:
@@ -57,9 +54,6 @@ func advance(dt: float, flow: Flow) -> void:
 	var volume := maxf(0.0, flow.discharge_at(origin.x + 5.0) - base_flow)
 	var force := maxf(extra, volume * 0.54)
 	peak = maxf(peak, force)
-	var v := flow.velocity_at(origin + Vector2(5.0, 0.0))
-	if v.length_squared() > 1.0:
-		direction = v.normalized()
 	var target := smoothstep(0.045, 0.92, force)
 	strength = lerpf(strength, target if phase != Phase.AFTERMATH else 0.0, 1.0 - exp(-dt * 10.0))
 	var width := flow.gap_width(origin)
@@ -70,7 +64,6 @@ func advance(dt: float, flow: Flow) -> void:
 		Phase.OPENING:
 			if force > 0.045:
 				transition(Phase.JET)
-				jet_started.emit(smoothstep(0.045, 0.62, force))
 			elif age > 0.38 and not prying:
 				transition(Phase.AFTERMATH)
 		Phase.JET:

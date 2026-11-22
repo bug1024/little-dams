@@ -43,9 +43,26 @@ class Piece:
 			fall_speed = 0.0
 
 
+class DrainPipe:
+	var point: Vector2
+	var host: Piece
+	var rate := 0.0
+
+	func _init(at: Vector2) -> void:
+		point = at
+
+	func position() -> Vector2:
+		return host.point if host != null else point
+
+	func reach() -> float:
+		return maxf(11.0, host.radius + 5.0) if host != null else 9.0
+
 var wall: Array[Piece] = []
+var pipes: Array[DrainPipe] = []
+
 func reset() -> void:
 	wall.clear()
+	pipes.clear()
 
 func settle(dt: float) -> void:
 	for piece in wall:
@@ -64,6 +81,11 @@ func detach(piece: Piece) -> void:
 	if not wall.has(piece):
 		return
 	wall.erase(piece)
+	for pipe in pipes.duplicate():
+		if pipe.host == piece:
+			# Leave the pipe loose at the break so it can be used again.
+			pipe.point = piece.point + Vector2(5.0, 0.0)
+			remove_pipe(pipe)
 	var base := piece.support
 	for top in wall:
 		if top.support != piece:
@@ -72,6 +94,11 @@ func detach(piece: Piece) -> void:
 		if top.support == null and not can_place(top, top.point, null):
 			find_footing(top)
 	piece.support = null
+
+func remove_pipe(pipe: DrainPipe) -> void:
+	pipes.erase(pipe)
+	pipe.host = null
+	pipe.rate = 0.0
 
 func find_footing(piece: Piece) -> void:
 	# Water pushes a falling stone downstream first, then toward an open seam.
