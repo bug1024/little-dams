@@ -8,6 +8,7 @@ const RockArt = preload("res://game/one_dam_rock_art.gd")
 const Wind = preload("res://game/one_dam_wind.gd")
 const Air = preload("res://game/one_dam_air.gd")
 const Rain = preload("res://game/one_dam_rain.gd")
+const GroundInsects = preload("res://game/one_dam_ground_insects.gd")
 const SIZE := Vector2(320, 200)
 const CHANNEL_MASK := preload("res://game/one_dam_channel.png")
 const PLATE := preload("res://game/one_dam_plate.png")
@@ -73,6 +74,7 @@ var flow_texture := ImageTexture.create_from_image(water_pixels)
 var surface := ShaderMaterial.new()
 var ground_light := ShaderMaterial.new()
 var summer := Summer.new()
+var ground_insects := GroundInsects.new()
 var wind := Wind.new()
 var rain := Rain.new()
 var painted_ground := PLATE.get_image()
@@ -166,6 +168,7 @@ func rain_contact(point: Vector2) -> Rain.Contact:
 
 func clear() -> void:
 	rain.clear()
+	ground_insects.reset(to_screen)
 	bank.clear()
 	rolling.clear()
 	droplets.clear()
@@ -451,6 +454,7 @@ func advance(dt: float) -> void:
 	advance_floaters(dt)
 	advance_streaks(dt)
 	summer.advance(dt, water)
+	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple)
 	air.advance(dt)
 	rain.advance_drops(dt, self)
 	sync_surface(dt)
@@ -479,6 +483,12 @@ func advance(dt: float) -> void:
 			ripples.remove_at(i)
 	queue_redraw()
 
+func insect_in_water(point: Vector2) -> bool:
+	return is_wet(point) and not on_bank(to_screen(point))
+
+func insect_ripple(point: Vector2) -> void:
+	ripples.append(Vector4(point.x, point.y, 0.0, 0.15))
+
 func pool_profile(basin: Pool, fallback: float) -> Vector2:
 	var center := basin.center(fallback)
 	var head := maxf(0.0, water.pool_head(center) - water.channel_depth(center + 19.0))
@@ -503,6 +513,7 @@ func _draw() -> void:
 	draw_breach_jet(lower_breach)
 	draw_froth()
 	draw_floaters()
+	ground_insects.draw(self)
 	summer.draw_insect(self)
 	rain.draw_drops(self)
 

@@ -26,6 +26,7 @@ func run() -> void:
 	check_support_loss()
 	check_floater_release()
 	check_rain()
+	check_ground_insect_encounter()
 	game.free()
 	quit(failures)
 
@@ -309,3 +310,24 @@ func check_rain() -> void:
 	game.restart()
 	expect(game.water.rain_runoff == 0.0 and game.scene.rain.wetness == 0.0
 		and game.scene.rain.drops.is_empty() and game.rain_button.text == "下雨", "Restart clears weather")
+
+func check_ground_insect_encounter() -> void:
+	for dt in [1.0 / 60.0, 0.18]:
+		game.restart()
+		var view := game.scene
+		var insects := view.ground_insects
+		insects.rng.seed = 19
+		insects.mole.position = Vector2(173, 163)
+		insects.mole.target = Vector2(233, 163)
+		insects.mantis.position = Vector2(200, 163)
+		insects.mantis.target = Vector2(193, 163)
+		var nearest := INF
+		var alert := false
+		var passed := false
+		for i in ceili(3.2 / dt):
+			insects.advance(dt, view.to_screen, view.from_screen, view.insect_in_water, view.insect_ripple)
+			nearest = minf(nearest, insects.mole.position.distance_to(insects.mantis.position))
+			alert = alert or insects.mantis_alert > 0.54
+			passed = passed or insects.mole.position.x > 215.0
+		expect(nearest >= insects.CLEARANCE - 0.001 and alert and passed,
+			"Ground insects react and pass without intersecting at a %.3f s step" % dt)
