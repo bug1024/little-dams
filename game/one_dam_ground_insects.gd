@@ -4,6 +4,25 @@ const MANTIS_PATCH := Rect2(187, 156, 26, 14)
 const WATER_SPEED := 30.0
 const MOLE_SCALE := 0.58
 const CLEARANCE := 7.3 + 5.7 * MOLE_SCALE
+const ROAM_AREA := Rect2(8, 8, 304, 184)
+const CLIMB_LIMIT := 4.5
+
+class Rock:
+	var center: Vector2
+	var radius: Vector2
+	var height: float
+
+	func hit(start: Vector2, end: Vector2, padding: float) -> bool:
+		var footprint := radius + Vector2.ONE * padding
+		var a := (start - center) / footprint
+		var b := (end - center) / footprint
+		if start == end:
+			return a.length_squared() < 1.0
+		var nearest := Geometry2D.get_closest_point_to_segment(Vector2.ZERO, a, b)
+		# Let an insect escape if a player sets a stone down on top of it.
+		if a.length_squared() < 1.0:
+			return b.length_squared() < a.length_squared()
+		return nearest.length_squared() < 1.0
 
 class Crawler:
 	var position: Vector2
@@ -14,10 +33,14 @@ class Crawler:
 	var speed := 0.0
 	var avoid_side := 0.0
 	var art_scale := 1.0
+	var elevation := 0.0
+	var surface_pace := 1.0
 
 var rng := RandomNumberGenerator.new()
 var mole := Crawler.new()
 var mantis := Crawler.new()
+var held: Crawler
+var mantis_patch := MANTIS_PATCH
 var bank_side := 1.0
 var runs_to_cross := 2
 var ripple_delay := 0.0
@@ -26,6 +49,8 @@ var mole_wet := false
 var close_encounter := false
 var encounter_pause := 0.0
 var mantis_alert := 0.0
+var frog_blocker := Vector2.INF
+var rocks: Array[Rock] = []
 
 func reset(project: Callable) -> void:
 	bank_side = 1.0
@@ -36,6 +61,10 @@ func reset(project: Callable) -> void:
 	close_encounter = false
 	encounter_pause = 0.0
 	mantis_alert = 0.0
+	held = null
+	mantis_patch = MANTIS_PATCH
+	frog_blocker = Vector2.INF
+	rocks.clear()
 	mole.position = project.call(Vector2(77, 60))
 	mole.target = mole.position
 	mole.rest = 0.7
@@ -44,6 +73,7 @@ func reset(project: Callable) -> void:
 	mole.heading = Vector2.RIGHT
 	mole.avoid_side = 0.0
 	mole.art_scale = MOLE_SCALE
+	mole.elevation = 0.0
 	mantis.position = MANTIS_PATCH.get_center()
 	mantis.target = mantis.position
 	mantis.rest = 1.15
@@ -51,10 +81,66 @@ func reset(project: Callable) -> void:
 	mantis.speed = 0.0
 	mantis.heading = Vector2.LEFT
 	mantis.avoid_side = 0.0
+	mantis.elevation = 0.0
+
+func grab(point: Vector2) -> bool:
+	var mole_distance := (mole.position - Vector2(0, mole.elevation)).distance_to(point)
+	var mantis_distance := (mantis.position - Vector2(0, mantis.elevation)).distance_to(point)
+	if mole_distance <= 5.0 and mole_distance <= mantis_distance:
+		held = mole
+	elif mantis_distance <= 7.0:
+		held = mantis
+	return held != null
+
+func can_place_at(point: Vector2) -> bool:
+	var other := mantis if held == mole else mole
+	return other.position.distance_to(point) >= CLEARANCE
+
+func place(point: Vector2, bank: Vector2, side: float, wet: bool) -> void:
+	held.position = point
+	held.target = bank if wet else point
+	held.speed = 0.0
+	held.rest = 0.45
+	held.avoid_side = 0.0
+	held.elevation = 0.0
+	if held == mole:
+		bank_side = side
+		mole_wet = wet
+		ripple_delay = 0.15
+		encounter_pause = 0.0
+	else:
+		var size := MANTIS_PATCH.size
+		var center := (bank if wet else point).clamp(ROAM_AREA.position + size * 0.5, ROAM_AREA.end - size * 0.5)
+		mantis_patch = Rect2(center - size * 0.5, size)
+		mantis_alert = 0.0
+	held = null
+	close_encounter = false
 
 func path_clear(start: Vector2, end: Vector2, other: Vector2) -> bool:
 	var nearest := Geometry2D.get_closest_point_to_segment(other, start, end)
 	return nearest.distance_squared_to(other) >= CLEARANCE * CLEARANCE
+
+func add_rock(center: Vector2, radius: Vector2, height: float) -> void:
+	var rock := Rock.new()
+	rock.center = center
+	rock.radius = radius
+	rock.height = height
+	rocks.append(rock)
+
+func blocking_rock(crawler: Crawler, start: Vector2, end: Vector2) -> Rock:
+	var padding := 1.2 if crawler == mole else 2.3
+	for rock in rocks:
+		if (crawler != mole or rock.height > CLIMB_LIMIT) and rock.hit(start, end, padding):
+			return rock
+	return null
+
+func climb_height(point: Vector2) -> float:
+	var height := 0.0
+	for rock in rocks:
+		if rock.height <= CLIMB_LIMIT:
+			var distance := ((point - rock.center) / (rock.radius + Vector2.ONE * 0.8)).length()
+			height = maxf(height, rock.height * (1.0 - smoothstep(0.24, 1.0, distance)))
+	return height
 
 func walk(crawler: Crawler, other: Crawler, dt: float, pace: float, patch: Rect2) -> void:
 	var start := crawler.position
@@ -63,23 +149,31 @@ func walk(crawler: Crawler, other: Crawler, dt: float, pace: float, patch: Rect2
 		crawler.speed = 0.0
 		return
 	var direction := crawler.target - start
-	var distance := minf(crawler.speed + dt * (180.0 if crawler == mole else 11.0), pace) * dt
+	var climb := climb_height(start) if crawler == mole else 0.0
+	var stride_pace := pace * crawler.surface_pace * (1.0 - climb * 0.095)
+	var distance := minf(crawler.speed + dt * (180.0 if crawler == mole else 11.0), stride_pace) * dt
 	var next := start.move_toward(crawler.target, distance)
-	if not path_clear(start, next, other.position):
-		var outward := (start - other.position).normalized()
+	var frog_in_path := frog_blocker.is_finite() and not path_clear(start, next, frog_blocker)
+	var rock := blocking_rock(crawler, start, next)
+	if rock != null or frog_in_path or not path_clear(start, next, other.position):
+		var obstacle := rock.center if rock != null else (frog_blocker if frog_in_path else other.position)
+		var offset := start - obstacle
+		var outward := (offset / (rock.radius * rock.radius)).normalized() if rock != null else offset.normalized()
 		var tangent := outward.orthogonal()
 		if crawler.avoid_side == 0.0:
 			crawler.avoid_side = 1.0 if direction.dot(tangent) >= 0.0 else -1.0
 		var avoid := (tangent * crawler.avoid_side + outward * 0.48).normalized()
 		next = start + avoid * distance
-		if not patch.has_point(next):
+		if not patch.has_point(next) or blocking_rock(crawler, start, next) != null:
 			next = start + (outward * 0.48 - tangent * crawler.avoid_side).normalized() * distance
-		if not patch.has_point(next) or not path_clear(start, next, other.position):
+		if not patch.has_point(next) or blocking_rock(crawler, start, next) != null or not path_clear(start, next, other.position) or (
+			frog_blocker.is_finite() and not path_clear(start, next, frog_blocker)):
 			next = start
-	elif start.distance_to(other.position) > CLEARANCE + 4.0:
+	elif start.distance_to(other.position) > CLEARANCE + 4.0 and blocking_rock(crawler, start, crawler.target) == null:
 		crawler.avoid_side = 0.0
 	var step := next - start
 	crawler.position = next
+	crawler.elevation = move_toward(crawler.elevation, climb_height(next) if crawler == mole else 0.0, dt * 38.0)
 	crawler.speed = step.length() / dt
 	if crawler.speed > 0.01:
 		var angle := lerp_angle(crawler.heading.angle(), step.angle(), 1.0 - exp(-dt * (21.0 if crawler == mole else 7.0)))
@@ -91,7 +185,7 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 		return
 	time += dt
 	var gap := mole.position.distance_to(mantis.position)
-	if not close_encounter and gap < CLEARANCE + 5.0:
+	if held == null and not close_encounter and gap < CLEARANCE + 5.0:
 		close_encounter = true
 		encounter_pause = 0.16
 		mantis_alert = 1.0
@@ -101,15 +195,15 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 	mantis_alert = move_toward(mantis_alert, 0.0, dt * 0.78)
 	var bed_position: Vector2 = unproject.call(mole.position)
 	mole_wet = wet.call(bed_position)
-	if encounter_pause > 0.0:
+	if held == mole or encounter_pause > 0.0:
 		mole.speed = 0.0
 	else:
-		walk(mole, mantis, dt, WATER_SPEED if mole_wet else 48.0, Rect2(8, 8, 304, 184))
+		walk(mole, mantis, dt, WATER_SPEED if mole_wet else 48.0, ROAM_AREA)
 	ripple_delay -= dt
 	if mole_wet and mole.speed > 0.0 and ripple_delay <= 0.0:
 		ripple.call(bed_position)
 		ripple_delay = 0.21
-	if encounter_pause <= 0.0 and (mole.position.is_equal_approx(mole.target) or mole.speed == 0.0):
+	if held != mole and encounter_pause <= 0.0 and (mole.position.is_equal_approx(mole.target) or mole.speed == 0.0):
 		mole.rest -= dt
 		if mole.rest <= 0.0:
 			var x := clampf(mole.position.x + rng.randf_range(-49.0, 49.0), 51.0, 238.0)
@@ -122,21 +216,27 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 			mole.target = project.call(Vector2(x, bank_side * rng.randf_range(53.0, 69.0)))
 			mole.rest = rng.randf_range(0.45, 2.15)
 
-	if mantis_alert > 0.54:
+	var mantis_wet: bool = wet.call(unproject.call(mantis.position))
+	if held == mantis:
+		mantis.speed = 0.0
+	elif mantis_alert > 0.54 and not mantis_wet:
 		mantis.speed = 0.0
 		var threat := (mole.position - mantis.position).angle()
 		mantis.heading = Vector2.from_angle(lerp_angle(mantis.heading.angle(), threat, 1.0 - exp(-dt * 5.2)))
 	else:
-		walk(mantis, mole, dt, 3.25, MANTIS_PATCH)
-	if mantis_alert <= 0.54 and (mantis.position.is_equal_approx(mantis.target) or mantis.speed == 0.0):
+		var boundary := ROAM_AREA if mantis_wet or not mantis_patch.has_point(mantis.position) else mantis_patch
+		walk(mantis, mole, dt, 9.0 if mantis_wet else 3.25, boundary)
+	if held != mantis and mantis_alert <= 0.54 and (mantis.position.is_equal_approx(mantis.target) or mantis.speed == 0.0):
 		mantis.rest -= dt
 		if mantis.rest <= 0.0:
 			var point := mantis.position + Vector2(rng.randf_range(-11.0, 11.0), rng.randf_range(-5.5, 5.5))
-			mantis.target = point.clamp(MANTIS_PATCH.position, MANTIS_PATCH.end - Vector2.ONE * 0.5)
+			var candidate := point.clamp(mantis_patch.position, mantis_patch.end - Vector2.ONE * 0.5)
+			if not wet.call(unproject.call(candidate)) and blocking_rock(mantis, candidate, candidate) == null:
+				mantis.target = candidate
 			mantis.rest = rng.randf_range(0.9, 3.2)
 
 func mark(crawler: Crawler, x: float, y: float) -> Vector2:
-	var p := crawler.position + (crawler.heading * x + crawler.heading.orthogonal() * y) * crawler.art_scale
+	var p := crawler.position + (crawler.heading * x + crawler.heading.orthogonal() * y) * crawler.art_scale - Vector2(0, crawler.elevation)
 	return (p * 2.0).round() * 0.5
 
 func line(canvas: Node2D, crawler: Crawler, a: Vector2, b: Vector2, ink: Color, width: float = 0.5) -> void:
@@ -149,9 +249,27 @@ func body(canvas: Node2D, crawler: Crawler, shape: Array[Vector2], ink: Color, l
 		points.append(mark(crawler, p.x, p.y) - height)
 	canvas.draw_colored_polygon(points, ink)
 
-func draw(canvas: Node2D) -> void:
-	draw_mole(canvas)
-	draw_mantis(canvas)
+func behind_rock(crawler: Crawler) -> bool:
+	if crawler == held or crawler.elevation > 0.25:
+		return false
+	for rock in rocks:
+		var offset := crawler.position - rock.center
+		if offset.y < 0.0 and offset.y > -rock.radius.y - 4.0 and absf(offset.x) < rock.radius.x:
+			return true
+	return false
+
+func draw(canvas: Node2D, pointer: Vector2, behind: bool) -> void:
+	for crawler: Crawler in [mole, mantis]:
+		if behind_rock(crawler) != behind:
+			continue
+		var original := crawler.position
+		if crawler == held:
+			crawler.position = pointer - Vector2(0, 5)
+		if crawler == mole:
+			draw_mole(canvas)
+		else:
+			draw_mantis(canvas)
+		crawler.position = original
 
 func draw_mole(canvas: Node2D) -> void:
 	var pace := smoothstep(1.0, 26.0, mole.speed)

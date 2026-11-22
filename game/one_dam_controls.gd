@@ -1,6 +1,6 @@
 extends RefCounted
 
-enum Action { RELEASE, RESTART, RAIN }
+enum Action { RELEASE, RESTART, RAIN, MUSIC }
 
 # Each character is drawn on the same pixel grid as the scene and cursor.
 const GLYPHS := {
@@ -39,10 +39,31 @@ const GLYPHS := {
 		"#.#..#...#..", "..#..#####..", "..#.########", "..#.#......#",
 		"..#..######.", "..#.....#...", "..#.....#...", "..#...###...",
 	],
+	"音": [
+		".....##.....", ".##########.", "...#...#....", "....#.#.....",
+		"############", "............", "..########..", "..#......#..",
+		"..########..", "..#......#..", "..########..", "............",
+	],
+	"乐": [
+		".......###..", "..#####.....", "..#..#......", "..#..#......",
+		".##########.", ".....#......", ".....#......", "..#..#..#...",
+		"..#..#...#..", ".#...#....#.", ".....#......", "...###......",
+	],
+	"开": [
+		"............", ".##########.", "....#..#....", "....#..#....",
+		"....#..#....", "############", "....#..#....", "....#..#....",
+		"...#...#....", "...#...#....", "..#....#....", ".#.....#....",
+	],
+	"关": [
+		"..#......#..", "...#....#...", ".##########.", ".....##.....",
+		".....##.....", "############", ".....##.....", "....#..#....",
+		"...#....#...", "..#......#..", ".#........#.", "#..........#",
+	],
 }
 const RIPPLE := ["....#....", "...###...", "..#####..", "..#####..", "...###...", ".........", ".##...##.", "...###..."]
 const RETURN := ["..#......", ".##.###..", "###....#.", ".##.....#", "..#.....#", "........#", ".#.....#.", "..#####.."]
 const CLOUD := ["...###...", "..#...#..", ".#.....#.", "#########", ".........", ".#..#..#.", "#..#..#..", "........."]
+const NOTE := [".....###.", ".....#..#", ".....#...", ".....#...", ".....#...", "..####...", ".#####...", "..###...."]
 const UNIT := 2
 const FONT_SIZE := 24
 const BUTTON_HEIGHT := 44
@@ -58,8 +79,8 @@ func configure(button: Button, title: String, variant: Action, action: Callable)
 	button.add_theme_font_override("font", lettering)
 	button.add_theme_font_size_override("font_size", FONT_SIZE)
 	button.add_theme_constant_override("h_separation", 8)
-	var width := 106 if variant != Action.RESTART else 100
-	var wood: Color = [Color("#64583b"), Color("#594735"), Color("#48574e")][variant]
+	var width: int = [106, 100, 106, 136][variant]
+	var wood: Color = [Color("#64583b"), Color("#594735"), Color("#48574e"), Color("#605343")][variant]
 	for state in ["normal", "hover", "pressed", "disabled"]:
 		button.add_theme_stylebox_override(state, make_plaque(width, wood, state))
 		button.add_theme_color_override("font_color" if state == "normal" else "font_" + state + "_color",
@@ -90,8 +111,8 @@ func make_lettering() -> FontFile:
 
 func make_icon(variant: Action) -> ImageTexture:
 	var bitmap := Image.create_empty(20, 18, false, Image.FORMAT_RGBA8)
-	ink(bitmap, [RIPPLE, RETURN, CLOUD][variant], Vector2i.ZERO, UNIT,
-		[Color("#9ed6c1"), Color("#ddba83"), Color("#b7cfd4")][variant])
+	ink(bitmap, [RIPPLE, RETURN, CLOUD, NOTE][variant], Vector2i.ZERO, UNIT,
+		[Color("#9ed6c1"), Color("#ddba83"), Color("#b7cfd4"), Color("#e1c79b")][variant])
 	return ImageTexture.create_from_image(bitmap)
 
 func ink(bitmap: Image, rows: Array, origin: Vector2i, pixel: int, color: Color) -> void:

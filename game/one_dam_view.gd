@@ -9,12 +9,17 @@ const Wind = preload("res://game/one_dam_wind.gd")
 const Air = preload("res://game/one_dam_air.gd")
 const Rain = preload("res://game/one_dam_rain.gd")
 const GroundInsects = preload("res://game/one_dam_ground_insects.gd")
+const Frog = preload("res://game/one_dam_frog.gd")
 const SIZE := Vector2(320, 200)
 const CHANNEL_MASK := preload("res://game/one_dam_channel.png")
 const PLATE := preload("res://game/one_dam_plate.png")
 const PAPER := Color("#f7dda2")
 const FOAM := Color("#c2f8ef")
 const LEAF_CLEARANCE := 1.45
+const ROCK_LEDGE_FEET := [
+	Rect2(67, 78, 20, 9), Rect2(117, 74, 29, 11), Rect2(172, 64, 27, 10),
+	Rect2(230, 54, 18, 10), Rect2(266, 153, 35, 13), Rect2(284, 175, 26, 11),
+]
 signal stone_splash(mass: float, strength: float)
 # Centers and half widths traced from the near-view shoreline at sixteen-pixel intervals.
 const CHANNEL_Y := [89.2, 94.6, 100.3, 108.1, 111.5, 118.2, 117.9, 113.7, 117.0, 114.7, 112.4, 109.2, 105.0, 100.9, 96.8, 89.9, 84.3, 78.0, 72.1, 68.8, 66.0]
@@ -75,6 +80,7 @@ var surface := ShaderMaterial.new()
 var ground_light := ShaderMaterial.new()
 var summer := Summer.new()
 var ground_insects := GroundInsects.new()
+var frog := Frog.new()
 var wind := Wind.new()
 var rain := Rain.new()
 var painted_ground := PLATE.get_image()
@@ -130,6 +136,7 @@ func _ready() -> void:
 	summer.wind = wind
 	summer.fish_surface.connect(func(point: Vector2) -> void:
 		ripples.append(Vector4(point.x, point.y, 0.0, 0.23)))
+	frog.landed.connect(on_frog_landed)
 	air.wind = wind
 	air.view = self
 	air.z_index = 2
@@ -169,6 +176,14 @@ func rain_contact(point: Vector2) -> Rain.Contact:
 func clear() -> void:
 	rain.clear()
 	ground_insects.reset(to_screen)
+	frog.reset()
+	summer.fish_held = false
+	summer.fish_stranded = false
+	summer.fish_released = false
+	summer.fish_time = -1.0
+	summer.fish_due = summer.clock + 4.0
+	summer.insect_held = false
+	summer.temporary_perch = false
 	bank.clear()
 	rolling.clear()
 	droplets.clear()
@@ -454,7 +469,13 @@ func advance(dt: float) -> void:
 	advance_floaters(dt)
 	advance_streaks(dt)
 	summer.advance(dt, water)
+	ground_insects.frog_blocker = frog.position if frog.duration <= 0.0 else Vector2.INF
+	refresh_insect_terrain()
 	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple)
+	frog.advance(dt, frog_clear)
+	for crawler in [ground_insects.mole, ground_insects.mantis]:
+		if crawler != ground_insects.held:
+			summer.disturb_perch(crawler.position)
 	air.advance(dt)
 	rain.advance_drops(dt, self)
 	sync_surface(dt)
@@ -483,11 +504,92 @@ func advance(dt: float) -> void:
 			ripples.remove_at(i)
 	queue_redraw()
 
+func refresh_insect_terrain() -> void:
+	ground_insects.rocks.clear()
+	for ledge: Rect2 in ROCK_LEDGE_FEET:
+		ground_insects.add_rock(ledge.get_center(), ledge.size * 0.5, 8.0)
+	for pieces in [bank, model.wall, lower.wall, riffle]:
+		for piece: Pool.Piece in pieces:
+			if piece == held:
+				continue
+			var footprint := Vector2(0.82, 0.51) * piece.radius
+			var height := piece.radius * (0.53 if piece.kind == Pool.STONE else 0.31) + piece.visible_lift
+			ground_insects.add_rock(piece_screen(piece) + Vector2(0, piece.radius * 0.13), footprint, height)
+	for crawler: GroundInsects.Crawler in [ground_insects.mole, ground_insects.mantis]:
+		var at := crawler.position.clamp(Vector2.ZERO, SIZE - Vector2.ONE)
+		var substrate := rain_contact(at)
+		var speed := 0.72 if substrate == Rain.Contact.LEAVES else 1.0
+		if substrate != Rain.Contact.WATER:
+			speed *= 1.0 - rain.wetness * 0.16
+		crawler.surface_pace = speed
+
 func insect_in_water(point: Vector2) -> bool:
 	return is_wet(point) and not on_bank(to_screen(point))
 
 func insect_ripple(point: Vector2) -> void:
 	ripples.append(Vector4(point.x, point.y, 0.0, 0.15))
+
+func frog_clear(point: Vector2) -> bool:
+	return point.distance_to(ground_insects.mole.position) >= GroundInsects.CLEARANCE and point.distance_to(ground_insects.mantis.position) >= 12.0 and (
+		summer.insect_state != Summer.Flight.PERCHED or point.distance_to(summer.insect_position) >= 9.0)
+
+func on_frog_landed(point: Vector2) -> void:
+	var local := from_screen(point)
+	if insect_in_water(local):
+		burst(local, 0.31)
+
+func holding_animal() -> bool:
+	return ground_insects.held != null or summer.insect_held or summer.fish_held or frog.held
+
+func cancel_animal_grab() -> void:
+	ground_insects.held = null
+	summer.insect_held = false
+	summer.fish_held = false
+	frog.held = false
+
+func grab_animal(point: Vector2) -> bool:
+	if ground_insects.grab(point):
+		return true
+	summer.insect_held = summer.insect_position.distance_to(point) <= 9.0
+	if summer.insect_held:
+		return true
+	frog.held = frog.screen_point().distance_to(point) <= 7.0
+	if frog.held:
+		return true
+	summer.fish_held = summer.fish_time >= 0.25 and to_screen(summer.fish).distance_to(point) <= 7.0
+	return summer.fish_held
+
+func can_place_animal(point: Vector2) -> bool:
+	if not Rect2(Vector2(2, 2), SIZE - Vector2(4, 4)).has_point(point):
+		return false
+	if not frog.held and point.distance_to(frog.position) < GroundInsects.CLEARANCE:
+		return false
+	if frog.held or summer.fish_held:
+		return frog_clear(point)
+	if ground_insects.held != null:
+		return ground_insects.can_place_at(point) and (
+			summer.insect_state != Summer.Flight.PERCHED or point.distance_to(summer.insect_position) >= 8.0)
+	return point.distance_to(ground_insects.mole.position) >= 8.0 and point.distance_to(ground_insects.mantis.position) >= 10.0
+
+func place_animal(point: Vector2) -> void:
+	if not holding_animal() or not can_place_animal(point):
+		return
+	var local := from_screen(point)
+	var wet := insect_in_water(local)
+	if frog.held:
+		frog.place(point)
+		on_frog_landed(point)
+		return
+	elif summer.fish_held:
+		summer.place_fish(local, wet and water.depth_at(local) >= 0.13)
+	elif ground_insects.held != null:
+		var side := -1.0 if local.y < 0.0 else 1.0
+		var bank := to_screen(Vector2(local.x, side * 48.0)).clamp(Vector2(9, 9), SIZE - Vector2(9, 9))
+		ground_insects.place(point, bank, side, wet)
+	else:
+		summer.place_insect(point, wet)
+	if wet:
+		burst(local, 0.13)
 
 func pool_profile(basin: Pool, fallback: float) -> Vector2:
 	var center := basin.center(fallback)
@@ -497,7 +599,7 @@ func pool_profile(basin: Pool, fallback: float) -> Vector2:
 func _draw() -> void:
 	if water == null:
 		return
-	summer.draw_fish(self, to_screen)
+	summer.draw_fish(self, to_screen, pointer)
 	draw_pond_edge(model, 146.0)
 	draw_pond_edge(lower, 262.0)
 	draw_current()
@@ -506,6 +608,7 @@ func _draw() -> void:
 	draw_shore_bubbles()
 	rain.draw_puddles(self)
 	summer.draw_land(self)
+	ground_insects.draw(self, pointer, true)
 	draw_materials()
 	draw_seams(model)
 	draw_seams(lower)
@@ -513,9 +616,13 @@ func _draw() -> void:
 	draw_breach_jet(lower_breach)
 	draw_froth()
 	draw_floaters()
-	ground_insects.draw(self)
-	summer.draw_insect(self)
+	ground_insects.draw(self, pointer, false)
+	summer.draw_insect(self, pointer)
+	summer.draw_fish(self, to_screen, pointer, true)
+	frog.draw(self, pointer)
 	rain.draw_drops(self)
+	if holding_animal():
+		draw_drop_hint()
 
 func draw_pond_edge(basin: Pool, fallback: float) -> void:
 	if basin.wall.is_empty():
@@ -730,14 +837,17 @@ func draw_materials() -> void:
 		draw_piece(piece, p, item.turn if piece.kind == Pool.STONE else item.turn * 0.35, 0.8)
 	if held != null:
 		draw_piece(held, (pointer - Vector2(0, maxf(5.0, preview_lift))).round(), 0.0)
-		var center := snap_pixel((pointer + Vector2(0, 5)).clamp(Vector2(8, 2), SIZE - Vector2(8, 3)))
-		var bar := Rect2(center - Vector2(5.5, 1), Vector2(11, 2)) if clear_drop else Rect2(center - Vector2(6.5, 1.5), Vector2(13, 3))
-		var outline := Color("#173324") if clear_drop else Color("#4c151d")
-		var fill := Color("#8ae27b") if clear_drop else Color("#ff595f")
-		draw_rect(bar.grow(0.5), outline)
-		draw_rect(bar, fill)
-		draw_rect(Rect2(bar.position + Vector2(0.5, 0), Vector2(bar.size.x - 1, 0.5)),
-			Color("#ceffad") if clear_drop else Color("#ffc2ab"))
+		draw_drop_hint()
+
+func draw_drop_hint() -> void:
+	var center := snap_pixel((pointer + Vector2(0, 5)).clamp(Vector2(8, 2), SIZE - Vector2(8, 3)))
+	var bar := Rect2(center - Vector2(5.5, 1), Vector2(11, 2)) if clear_drop else Rect2(center - Vector2(6.5, 1.5), Vector2(13, 3))
+	var outline := Color("#173324") if clear_drop else Color("#4c151d")
+	var fill := Color("#8ae27b") if clear_drop else Color("#ff595f")
+	draw_rect(bar.grow(0.5), outline)
+	draw_rect(bar, fill)
+	draw_rect(Rect2(bar.position + Vector2(0.5, 0), Vector2(bar.size.x - 1, 0.5)),
+		Color("#ceffad") if clear_drop else Color("#ffc2ab"))
 
 func draw_brackets(p: Vector2, radius: float) -> void:
 	var color := Color(PAPER, 0.57)

@@ -2,6 +2,25 @@ extends RefCounted
 
 enum Cue { JET, CREST, SPLASH }
 
+static func frog_call() -> AudioStreamWAV:
+	const RATE := 22050
+	var samples := PackedByteArray()
+	samples.resize(roundi(RATE * 0.42) * 2)
+	var phase := 0.0
+	for i in samples.size() / 2:
+		var time := float(i) / RATE
+		var note := fposmod(time, 0.23)
+		var envelope := smoothstep(0.0, 0.022, note) * (1.0 - smoothstep(0.073, 0.18, note))
+		phase += TAU * (154.0 - note * 95.0 + sin(note * 82.0) * 10.0) / RATE
+		var sound := sin(phase) * 0.38 + sin(phase * 2.0) * 0.26 + sin(phase * 4.0) * 0.12
+		sound *= 0.68 + sin(time * 166.0) * 0.24
+		samples.encode_s16(i * 2, roundi(sound * envelope * 11500.0))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
 static func quiet_rain() -> AudioStreamWAV:
 	const RATE := 22050
 	const FRAMES := RATE * 5

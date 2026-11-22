@@ -27,6 +27,9 @@ func run() -> void:
 	check_floater_release()
 	check_rain()
 	check_ground_insect_encounter()
+	check_ground_insect_terrain()
+	check_insect_drag()
+	check_frog_and_loach()
 	game.free()
 	quit(failures)
 
@@ -84,13 +87,15 @@ func frames(count: int) -> void:
 		game._process(1.0 / 60.0)
 
 func drag_piece(piece: Materials.Piece, target: Vector2) -> void:
-	for down in [true, false]:
-		var event := InputEventMouseButton.new()
-		event.button_index = MOUSE_BUTTON_LEFT
-		event.pressed = down
-		var at := game.scene.piece_screen(piece) if down else game.scene.to_screen(target)
-		event.position = at * OneDam.SCALE
-		game._unhandled_input(event)
+	pointer_button(game.scene.piece_screen(piece), true)
+	pointer_button(game.scene.to_screen(target), false)
+
+func pointer_button(point: Vector2, down: bool) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.pressed = down
+	event.position = point * OneDam.SCALE
+	game._unhandled_input(event)
 
 func check_bank_drops() -> void:
 	var stone := game.scene.bank[0]
@@ -331,3 +336,101 @@ func check_ground_insect_encounter() -> void:
 			passed = passed or insects.mole.position.x > 215.0
 		expect(nearest >= insects.CLEARANCE - 0.001 and alert and passed,
 			"Ground insects react and pass without intersecting at a %.3f s step" % dt)
+
+func check_ground_insect_terrain() -> void:
+	game.restart()
+	var view := game.scene
+	var insects := view.ground_insects
+	view.bank.clear()
+	var path_start := Vector2(119, 178)
+	var path_end := Vector2(169, 178)
+	var stone := Materials.Piece.new(view.from_screen(Vector2(143, 176)), 13.0, Materials.STONE, 0)
+	view.bank.append(stone)
+	view.refresh_insect_terrain()
+	expect(insects.blocking_rock(insects.mole, path_start, path_end) != null,
+		"A loose stone blocks the mole cricket's path")
+	insects.mole.position = path_start
+	insects.mole.target = path_end
+	insects.mole.rest = 10.0
+	var detour := 0.0
+	var crossed_stone := false
+	for i in 150:
+		insects.walk(insects.mole, insects.mantis, 1.0 / 60.0, 48.0, insects.ROAM_AREA)
+		var at := insects.mole.position
+		detour = maxf(detour, absf(at.y - path_start.y))
+		crossed_stone = crossed_stone or insects.blocking_rock(insects.mole, at, at) != null
+	expect(insects.mole.position.distance_to(path_end) < 1.0 and detour > 5.0 and not crossed_stone,
+		"The mole cricket walks around a high stone without intersecting it")
+
+	drag_piece(stone, view.from_screen(Vector2(103, 177)))
+	view.refresh_insect_terrain()
+	expect(insects.blocking_rock(insects.mole, path_start, path_end) == null,
+		"Moving a stone opens its previous route")
+
+	var pebble := Materials.Piece.new(view.from_screen(Vector2(143, 177)), 5.0, Materials.STONE, 0)
+	view.bank.append(pebble)
+	view.refresh_insect_terrain()
+	insects.mole.position = path_start
+	insects.mole.speed = 0.0
+	var height := 0.0
+	for i in 140:
+		insects.walk(insects.mole, insects.mantis, 1.0 / 60.0, 48.0, insects.ROAM_AREA)
+		height = maxf(height, insects.mole.elevation)
+	expect(height > 1.5 and insects.mole.elevation < 0.01 and insects.mole.position.distance_to(path_end) < 1.0,
+		"The mole cricket climbs the pebble and steps down on the far side")
+	expect(insects.blocking_rock(insects.mantis, path_start, path_end) != null,
+		"The mantis treats the same pebble as an obstacle")
+
+func check_insect_drag() -> void:
+	game.restart()
+	var view := game.scene
+	var insects := view.ground_insects
+	var pond := view.to_screen(Vector2(153, 0))
+	pointer_button(insects.mantis.position, true)
+	expect(insects.held == insects.mantis, "Mouse grabs the mantis")
+	pointer_button(pond, false)
+	expect(insects.mantis.position.is_equal_approx(pond) and not view.holding_animal()
+		and not view.ripples.is_empty(), "A mantis can be dropped into water and makes a ripple")
+	frames(330)
+	expect(not view.insect_in_water(view.from_screen(insects.mantis.position)), "The mantis climbs back ashore")
+	var from := insects.mole.position
+	pointer_button(from, true)
+	pointer_button(insects.mantis.position, false)
+	expect(insects.mole.position.is_equal_approx(from), "An insect cannot be dropped on another")
+	var dry := Vector2(89, 183)
+	pointer_button(insects.mole.position, true)
+	pointer_button(dry, false)
+	expect(insects.mole.position.is_equal_approx(dry), "Mouse moves the mole cricket to another bank location")
+	pointer_button(view.summer.insect_position, true)
+	var grabbed := view.summer.insect_held
+	var landing := Vector2(175, 28)
+	pointer_button(landing, false)
+	expect(grabbed and view.summer.insect_position == landing and view.summer.temporary_perch,
+		"The dragonfly can be picked up and set down")
+
+func check_frog_and_loach() -> void:
+	game.restart()
+	var view := game.scene
+	var calls := [0]
+	var hops := [0]
+	view.frog.rng.seed = 0781
+	view.frog.croaked.connect(func() -> void: calls[0] += 1)
+	view.frog.landed.connect(func(_point: Vector2) -> void: hops[0] += 1)
+	var water_point := view.to_screen(Vector2(131, 0))
+	pointer_button(view.frog.screen_point(), true)
+	var frog_held := view.frog.held
+	pointer_button(water_point, false)
+	expect(frog_held and not view.frog.held and view.frog.position == water_point and not view.ripples.is_empty(),
+		"A frog can be dragged into the creek and splashes on release")
+	frames(420)
+	expect(hops[0] > 0 and calls[0] > 0, "The frog hops and calls after being released")
+	view.summer.place_fish(Vector2(102, 0), true)
+	view.summer.fish_time = 1.0
+	pointer_button(view.to_screen(view.summer.fish), true)
+	var fish_held := view.summer.fish_held
+	var move_to := Vector2(229, 0)
+	pointer_button(view.to_screen(move_to), false)
+	expect(fish_held and not view.summer.fish_held and view.summer.fish.is_equal_approx(move_to) and not view.summer.fish_stranded,
+		"The loach can be moved to another part of the creek")
+	frames(30)
+	expect(view.summer.fish.distance_to(move_to) > 2.0, "The released loach resumes swimming")

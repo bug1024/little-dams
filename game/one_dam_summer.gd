@@ -25,12 +25,17 @@ var fish_alarm := 0.0
 var fish_heading := Vector2.LEFT
 var fish_turn_due := 0.0
 var fish_surface_due := 0.0
+var fish_held := false
+var fish_stranded := false
+var fish_released := false
 var insect_state := Flight.PERCHED
 var insect_age := 0.0
 var insect_duration := 5.4
 var perch := 0
 var next_perch := 1
 var insect_position := Vector2(25.0, 113.0)
+var insect_held := false
+var temporary_perch := false
 var flight_origin := Vector2.ZERO
 var hover_point := Vector2.ZERO
 var surface_impulse := 0.0
@@ -57,12 +62,15 @@ func plant_tip(index: int, stem: int) -> Vector2:
 	return Vector2(root.x + (stem - 1.4) * 2.0 + plant_sway(index, stem), root.y - root.z * (0.73 + stem % 3 * 0.16))
 
 func advance_insect(dt: float) -> void:
+	if insect_held:
+		return
 	insect_age += dt
 	var t := clampf(insect_age / insect_duration, 0.0, 1.0)
 	var smooth := t * t * (3.0 - t * 2.0)
 	match insect_state:
 		Flight.PERCHED:
-			insect_position = plant_tip(PERCHES[perch], 2)
+			if not temporary_perch:
+				insect_position = plant_tip(PERCHES[perch], 2)
 			var exposed := wind != null and wind.strength_at(insect_position.x / 320.0) > 0.73
 			var flooded := surface_impulse > 0.60 and absf(insect_position.x - impulse_x) < 37.0
 			if t >= 1.0 or (insect_age > 2.2 and (exposed or flooded)):
@@ -85,6 +93,7 @@ func advance_insect(dt: float) -> void:
 				set_flight(Flight.PERCHED, rng.randf_range(6.5, 19.5))
 
 func take_flight() -> void:
+	temporary_perch = false
 	next_perch = (perch + rng.randi_range(1, PERCHES.size() - 1)) % PERCHES.size()
 	flight_origin = insect_position
 	hover_point = flight_origin.lerp(plant_tip(PERCHES[next_perch], 2), 0.61) + Vector2(rng.randf_range(-14.0, 14.0), -rng.randf_range(15.0, 28.0))
@@ -96,8 +105,17 @@ func set_flight(state: Flight, duration: float) -> void:
 	insect_duration = duration
 
 func disturb_perch(cursor: Vector2) -> void:
-	if insect_state == Flight.PERCHED and cursor.distance_to(insect_position) < 10.0:
+	if not insect_held and insect_state == Flight.PERCHED and cursor.distance_to(insect_position) < 5.0:
 		take_flight()
+
+func place_insect(point: Vector2, wet: bool) -> void:
+	insect_held = false
+	insect_position = point
+	if wet:
+		take_flight()
+	else:
+		temporary_perch = true
+		set_flight(Flight.PERCHED, 2.2)
 
 func disturb_water(point: Vector2, strength: float, surge: bool) -> void:
 	if surge:
@@ -110,8 +128,19 @@ func disturb_water(point: Vector2, strength: float, surge: bool) -> void:
 		fish_alarm = 0.9
 
 func advance_fish(dt: float, water: Flow) -> void:
+	if fish_held:
+		return
 	if fish_time >= 0.0:
 		fish_time += dt
+		if fish_stranded:
+			var toward := Vector2(0, -signf(fish.y))
+			fish_heading = toward if toward != Vector2.ZERO else fish_heading
+			fish = fish.move_toward(Vector2(fish.x, 0.0), dt * (3.0 + maxf(0.0, sin(fish_time * 18.0)) * 13.0))
+			fish_stranded = absf(fish.y) > 29.0 or water.depth_at(fish) < 0.13
+			if not fish_stranded:
+				fish_time = 0.0
+				fish_surface.emit(fish)
+			return
 		fish_alarm = move_toward(fish_alarm, 0.0, dt)
 		var velocity := water.velocity_at(fish)
 		if velocity.length() > 36.0 and fish_alarm < 0.15:
@@ -132,9 +161,10 @@ func advance_fish(dt: float, water: Flow) -> void:
 			if depth > 0.15 and depth < 0.42:
 				fish_surface.emit(fish)
 				fish_surface_due = INF
-		if fish_time >= 5.0 or fish.x < 8.0 or fish.x > 314.0:
+		if fish_time >= (14.0 if fish_released else 5.0) or fish.x < 8.0 or fish.x > 314.0:
 			fish_due = clock + rng.randf_range(8.0, 20.0)
 			fish_time = -1.0
+			fish_released = false
 	elif clock >= fish_due:
 		var offset := rng.randi_range(0, FISH_SHELTERS.size() - 1)
 		for i in FISH_SHELTERS.size():
@@ -149,14 +179,29 @@ func advance_fish(dt: float, water: Flow) -> void:
 				return
 		fish_due = clock + 5.0
 
-func draw_fish(canvas: Node2D, project: Callable) -> void:
+func place_fish(point: Vector2, wet: bool) -> void:
+	fish = point
+	fish_time = 0.0
+	fish_stranded = not wet
+	fish_released = true
+	fish_held = false
+	fish_alarm = 0.65
+	fish_turn_due = 0.75
+	fish_surface_due = 2.0
+	fish_heading = Vector2.RIGHT if point.x < 160.0 else Vector2.LEFT
+
+func draw_fish(canvas: Node2D, project: Callable, pointer: Vector2, foreground := false) -> void:
 	if fish_time < 0.0:
 		return
-	var position: Vector2 = project.call(fish)
-	var presence := smoothstep(0.0, 0.7, fish_time) * (1.0 - smoothstep(3.0, 4.8, fish_time))
-	var tail := sin(fish_time * (12.0 + fish_alarm * 17.0)) * (1.2 + fish_alarm)
+	if foreground != (fish_held or fish_stranded):
+		return
+	var position: Vector2 = pointer - Vector2(0, 5) if fish_held else project.call(fish)
+	var presence := 1.0 if fish_held or fish_stranded else (
+		smoothstep(0.0, 0.25 if fish_released else 0.7, fish_time) * (
+		1.0 - smoothstep(12.0 if fish_released else 3.0, 14.0 if fish_released else 4.8, fish_time)))
+	var tail := sin((clock if fish_held else fish_time) * (12.0 + fish_alarm * 17.0)) * (1.2 + fish_alarm)
 	var turn := fish_heading.angle() - PI
-	var shadow := Color(0.08, 0.18, 0.18, presence * 0.58)
+	var shadow := Color("#665644") if foreground else Color(0.08, 0.18, 0.18, presence * 0.58)
 	canvas.draw_colored_polygon(PackedVector2Array([
 		position + Vector2(-4.1, 0.1).rotated(turn), position + Vector2(-1.5, -1.35).rotated(turn),
 		position + Vector2(2.1, -0.75).rotated(turn), position + Vector2(5.2, tail - 0.8).rotated(turn),
@@ -211,9 +256,9 @@ func draw_litter_leaf(canvas: Node2D, at: Vector2, turn: float, ink: Color) -> v
 	canvas.draw_colored_polygon(shape, ink)
 	canvas.draw_line(at, at + Vector2(1.7, -0.4).rotated(turn), ink.darkened(0.26), 0.5)
 
-func draw_insect(canvas: Node2D) -> void:
-	var point := insect_position
-	var settled := insect_state == Flight.PERCHED
+func draw_insect(canvas: Node2D, pointer: Vector2) -> void:
+	var point := pointer - Vector2(0, 5) if insect_held else insect_position
+	var settled := insect_held or insect_state == Flight.PERCHED
 	var flex := sin(insect_age * 61.0) if not settled else sin(clock * 5.0) * smoothstep(0.87, 0.99, sin(clock * 0.7)) * 0.65
 	var glint := Color(0.78, 0.91, 0.72, 0.63 + absf(flex) * 0.26)
 	canvas.draw_line(point - Vector2(3.2, 0), point + Vector2(2.2, -0.6), Color("#345947"), 0.8)

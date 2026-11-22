@@ -27,6 +27,7 @@ var canvas := SubViewport.new()
 var scene := View.new()
 var gate := Button.new()
 var rain_button := Button.new()
+var music_button := Button.new()
 var creek: AudioStreamPlayer
 var music: AudioStreamPlayer
 var clack: AudioStreamPlayer
@@ -34,6 +35,7 @@ var water_jet: AudioStreamPlayer
 var water_crest: AudioStreamPlayer
 var stone_splash: AudioStreamPlayer
 var rain_audio: AudioStreamPlayer
+var frog_audio: AudioStreamPlayer
 var held: Pool.Piece
 var held_floater: View.Floater
 var from_bank := false
@@ -88,6 +90,11 @@ func _ready() -> void:
 		rain_audio.stream = WaterAudio.quiet_rain()
 		rain_audio.volume_db = -60.0
 		add_child(rain_audio)
+		frog_audio = AudioStreamPlayer.new()
+		frog_audio.stream = WaterAudio.frog_call()
+		frog_audio.volume_db = -22.0
+		add_child(frog_audio)
+		scene.frog.croaked.connect(frog_audio.play)
 	model.released.connect(on_released.bind(false))
 	lower.released.connect(on_released.bind(true))
 	model.landed.connect(scene.support_impact)
@@ -147,9 +154,13 @@ func build_controls() -> void:
 	gate.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	art.configure(reset, "重来", Controls.Action.RESTART, restart)
 	art.configure(rain_button, "下雨", Controls.Action.RAIN, toggle_rain)
+	art.configure(music_button, "音乐开", Controls.Action.MUSIC, toggle_music)
+	music_button.toggle_mode = true
+	music_button.set_pressed_no_signal(true)
 	actions.add_child(gate)
 	actions.add_child(reset)
 	actions.add_child(rain_button)
+	actions.add_child(music_button)
 	var group_size := actions.get_combined_minimum_size()
 	var margin := Vector2(24, 22)
 	actions.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -157,6 +168,11 @@ func build_controls() -> void:
 	actions.offset_top = -group_size.y - margin.y
 	actions.offset_right = -margin.x
 	actions.offset_bottom = -margin.y
+
+func toggle_music() -> void:
+	var enabled := music_button.button_pressed
+	music.stream_paused = not enabled
+	music_button.text = "音乐开" if enabled else "音乐关"
 
 func audio(path: String, volume: float, loop := false) -> AudioStreamPlayer:
 	var player := AudioStreamPlayer.new()
@@ -183,6 +199,8 @@ func restart() -> void:
 	rain_button.text = "下雨"
 	if rain_audio != null:
 		rain_audio.stop()
+	if frog_audio != null:
+		frog_audio.stop()
 	upper_breach.reset()
 	lower_breach.reset()
 	cancel_grab()
@@ -263,7 +281,7 @@ func find_piece(point: Vector2) -> Pool.Piece:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
-		if held != null or held_floater != null:
+		if held != null or held_floater != null or scene.holding_animal():
 			_unhandled_input(event)
 			get_viewport().set_input_as_handled()
 
@@ -278,9 +296,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion:
 		var pointer := stage_pointer(event.position)
-		scene.summer.disturb_perch(pointer)
-		if held != null or held_floater != null:
+		if held != null or held_floater != null or scene.holding_animal():
 			update_grab(pointer)
+		else:
+			scene.summer.disturb_perch(pointer)
 		return
 	if event is not InputEventMouseButton:
 		return
@@ -288,6 +307,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var point := stage_pointer(event.position)
 	if event.pressed:
+		if scene.grab_animal(point):
+			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
+			update_grab(point)
+			return
 		held = find_piece(point)
 		if held == gate_plug:
 			held = null
@@ -303,6 +326,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				scene.held_floater = held_floater
 				Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 				update_grab(point)
+		return
+	if scene.holding_animal():
+		scene.place_animal(point)
+		cancel_grab()
 		return
 	if held_floater != null:
 		if Rect2(Vector2.ZERO, View.SIZE).has_point(point):
@@ -373,6 +400,9 @@ func stage_pointer(point: Vector2) -> Vector2:
 
 func update_grab(point: Vector2) -> void:
 	scene.pointer = point
+	if scene.holding_animal():
+		scene.clear_drop = scene.can_place_animal(point)
+		return
 	if held == null:
 		return
 	var support := support_at(point, held)
@@ -386,6 +416,7 @@ func cancel_grab() -> void:
 	scene.held = null
 	held_floater = null
 	scene.held_floater = null
+	scene.cancel_animal_grab()
 	Input.set_default_cursor_shape(Input.CURSOR_ARROW)
 
 func _notification(what: int) -> void:
