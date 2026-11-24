@@ -258,24 +258,32 @@ func behind_rock(crawler: Crawler) -> bool:
 			return true
 	return false
 
-func draw(canvas: Node2D, pointer: Vector2, behind: bool) -> void:
+func apply_tint(color: Color, at: Vector2, tint_at: Callable) -> Color:
+	return tint_at.call(color, at) if tint_at.is_valid() else color
+
+func draw(canvas: Node2D, pointer: Vector2, behind: bool, ledge_front: Callable, front_pass := false,
+		tint_at: Callable = Callable()) -> void:
 	for crawler: Crawler in [mole, mantis]:
 		if behind_rock(crawler) != behind:
 			continue
 		var original := crawler.position
+		var at := pointer if crawler == held else original
+		if ledge_front.call(at) != front_pass:
+			continue
 		if crawler == held:
 			crawler.position = pointer - Vector2(0, 5)
 		if crawler == mole:
-			draw_mole(canvas)
+			draw_mole(canvas, tint_at)
 		else:
-			draw_mantis(canvas)
+			draw_mantis(canvas, tint_at)
 		crawler.position = original
 
-func draw_mole(canvas: Node2D) -> void:
+func draw_mole(canvas: Node2D, tint_at: Callable = Callable()) -> void:
 	var pace := smoothstep(1.0, 26.0, mole.speed)
 	var lift := snappedf((0.5 + sin(mole.stride * 2.6) * 0.5) * pace, 0.5)
 	var digging := pow(maxf(0.0, sin(time * 2.45 + mole.position.x)), 8.0) * (1.0 - pace)
 	var shadow := Color("#30292379") if not mole_wet else Color("#28443d88")
+	var at := mole.position
 	line(canvas, mole, Vector2(-3.8, 0.9), Vector2(2.0, 0.9), shadow, 2.4)
 	for side in [-1.0, 1.0]:
 		for i in 2:
@@ -283,28 +291,29 @@ func draw_mole(canvas: Node2D) -> void:
 			var swing := sin(mole.stride * (3.5 if mole_wet else 2.2) + i * PI + side * 1.55) * pace
 			var knee := Vector2(x - 0.3 + swing, side * 1.9)
 			var foot := knee + Vector2(-0.8 + swing * 0.47, side * (1.25 - maxf(swing, 0.0) * 0.6))
-			line(canvas, mole, Vector2(x + 0.5, side * 0.85), knee, Color("#70513c"), 0.75)
-			line(canvas, mole, knee, foot, Color("#8b6749"))
+			line(canvas, mole, Vector2(x + 0.5, side * 0.85), knee, apply_tint(Color("#70513c"), at, tint_at), 0.75)
+			line(canvas, mole, knee, foot, apply_tint(Color("#8b6749"), at, tint_at))
 		var reach := digging * 0.84 + sin(mole.stride * 2.46 + side * 1.58) * pace * 0.86
 		var wrist := Vector2(2.7 + reach, side * 2.3)
-		line(canvas, mole, Vector2(0.95, side), wrist, Color("#71523a"), 1.25)
-		line(canvas, mole, wrist, Vector2(3.8 + reach, side * 2.05), Color("#a77b55"), 1.45)
-		line(canvas, mole, Vector2(3.6 + reach, side * 1.85), Vector2(4.35 + reach, side * 1.7), Color("#ba916c"))
+		line(canvas, mole, Vector2(0.95, side), wrist, apply_tint(Color("#71523a"), at, tint_at), 1.25)
+		line(canvas, mole, wrist, Vector2(3.8 + reach, side * 2.05), apply_tint(Color("#a77b55"), at, tint_at), 1.45)
+		line(canvas, mole, Vector2(3.6 + reach, side * 1.85), Vector2(4.35 + reach, side * 1.7), apply_tint(Color("#ba916c"), at, tint_at))
 		var twitch := sin(time * (5.0 + side) + mole.position.y) * 0.47
-		line(canvas, mole, Vector2(3.4, side * 0.55), Vector2(5.4, side * (1.13 + twitch)), Color("#927152"))
+		line(canvas, mole, Vector2(3.4, side * 0.55), Vector2(5.4, side * (1.13 + twitch)), apply_tint(Color("#927152"), at, tint_at))
 	body(canvas, mole, [Vector2(-4.6, 0), Vector2(-3.2, -1.65), Vector2(-0.6, -1.75), Vector2(1.4, -1.24),
-		Vector2(2.1, 0.30), Vector2(0.0, 1.76), Vector2(-3.1, 1.74)], Color("#523d31"), lift)
+		Vector2(2.1, 0.30), Vector2(0.0, 1.76), Vector2(-3.1, 1.74)], apply_tint(Color("#523d31"), at, tint_at), lift)
 	body(canvas, mole, [Vector2(-3.9, -0.5), Vector2(-2.75, -1.48), Vector2(-0.54, -1.50),
-		Vector2(0.65, -0.75), Vector2(-0.52, 0.25), Vector2(-2.74, 0.30)], Color("#976d4d") if not mole_wet else Color("#76634f"), lift)
+		Vector2(0.65, -0.75), Vector2(-0.52, 0.25), Vector2(-2.74, 0.30)], apply_tint(Color("#976d4d") if not mole_wet else Color("#76634f"), at, tint_at), lift)
 	body(canvas, mole, [Vector2(0.0, -1.35), Vector2(2.5, -1.48), Vector2(3.78, -0.84), Vector2(3.87, 0.51),
-		Vector2(2.42, 1.26), Vector2(0.55, 1.06)], Color("#684b36"), lift)
-	line(canvas, mole, Vector2(0.5, -0.72), Vector2(2.45, -0.85), Color("#b08a60"))
-	line(canvas, mole, Vector2(3.35, -0.55), Vector2(3.66, -0.45), Color("#282622"), 0.75)
+		Vector2(2.42, 1.26), Vector2(0.55, 1.06)], apply_tint(Color("#684b36"), at, tint_at), lift)
+	line(canvas, mole, Vector2(0.5, -0.72), Vector2(2.45, -0.85), apply_tint(Color("#b08a60"), at, tint_at))
+	line(canvas, mole, Vector2(3.35, -0.55), Vector2(3.66, -0.45), apply_tint(Color("#282622"), at, tint_at), 0.75)
 
-func draw_mantis(canvas: Node2D) -> void:
-	var olive := Color("#51683c")
-	var leaf := Color("#83a460")
-	var light := Color("#acc57b")
+func draw_mantis(canvas: Node2D, tint_at: Callable = Callable()) -> void:
+	var at := mantis.position
+	var olive := apply_tint(Color("#51683c"), at, tint_at)
+	var leaf := apply_tint(Color("#83a460"), at, tint_at)
+	var light := apply_tint(Color("#acc57b"), at, tint_at)
 	var lift := 0.5 + snappedf(mantis_alert * 0.63, 0.5)
 	var stride_weight := smoothstep(0.15, 1.6, mantis.speed)
 	var look := sin(time * 1.55) * (0.48 + mantis_alert * 0.77)
@@ -330,4 +339,4 @@ func draw_mantis(canvas: Node2D) -> void:
 	body(canvas, mantis, [Vector2(3.0, look - 0.82), Vector2(4.18, look - 1.10), Vector2(4.75, look + 0.05),
 		Vector2(3.98, look + 1.15), Vector2(2.99, look + 0.72)], light, lift)
 	var eye := mark(mantis, 4.2, look - 0.53) - Vector2(0, lift)
-	canvas.draw_rect(Rect2(eye, Vector2(0.5, 0.5)), Color("#465933"))
+	canvas.draw_rect(Rect2(eye, Vector2(0.5, 0.5)), apply_tint(Color("#465933"), at, tint_at))

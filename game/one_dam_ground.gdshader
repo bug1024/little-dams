@@ -6,6 +6,10 @@ render_mode unshaded;
 uniform vec4 canopy_flutter;
 uniform float rain_wetness;
 uniform float rain_intensity;
+uniform bool independent_prop = false;
+uniform vec4 prop_region = vec4(0.0, 0.0, 1.0, 1.0);
+uniform vec2 prop_sway = vec2(0.0);
+uniform float prop_anchor = 0.0;
 uniform sampler2D channel_mask : filter_nearest, repeat_disable;
 uniform sampler2D channel_profile : filter_linear, repeat_disable;
 uniform sampler2D flow_state : filter_linear, repeat_disable;
@@ -43,31 +47,43 @@ float cast_leaf_shade(vec2 p, vec2 texel) {
 }
 
 void fragment() {
-	vec2 texel = TEXTURE_PIXEL_SIZE;
-	vec2 p = (floor(UV / texel) + 0.5) * texel;
-	vec3 art = texture(TEXTURE, p).rgb;
-
-	// Paint regions identify movable crowns and tips. Sample only other plant pixels in those regions.
+	vec2 local_texel = TEXTURE_PIXEL_SIZE;
+	vec2 uv = (floor(UV / local_texel) + 0.5) * local_texel;
+	vec2 p = prop_region.xy + uv * prop_region.zw;
+	vec2 texel = local_texel * prop_region.zw;
+	vec2 sample_at = uv;
+	if (independent_prop && prop_anchor > 0.0) {
+		float flex = smoothstep(0.0, prop_anchor * 0.85, prop_anchor - uv.y);
+		sample_at -= round(prop_sway * flex) * local_texel;
+	}
+	vec4 source = texture(TEXTURE, sample_at);
+	float silhouette = source.a;
+	if (any(lessThan(sample_at, vec2(0.0))) || any(greaterThanEqual(sample_at, vec2(1.0)))) {
+		silhouette = 0.0;
+	}
+	vec3 art = source.rgb;
 	float green = foliage_color(art);
-	float hanging = fringe(p, vec2(0.162, 0.089), vec2(0.245, 0.142));
-	float upper_growth = max(fringe(p, vec2(0.42, 0.17), vec2(0.087, 0.086)),
-		fringe(p, vec2(0.72, 0.16), vec2(0.11, 0.11)));
-	float reeds = fringe(p, vec2(0.055, 0.82), vec2(0.115, 0.19));
-	float near_bank = max(fringe(p, vec2(0.709, 0.843), vec2(0.125, 0.129)),
-		fringe(p, vec2(0.88, 0.659), vec2(0.086, 0.118)));
-	float mid_bank = fringe(p, vec2(0.464, 0.306), vec2(0.087, 0.063));
-	float gust = wind_at(p.x);
-	float flutter = 0.80 + gust * 0.75;
-	float movement = hanging * branch_sway(p);
-	movement += max(upper_growth, mid_bank) * branch_sway(p + vec2(0.12, 0.04));
-	movement += max(reeds, near_bank) * branch_sway(p + vec2(0.24, 0.03)) * 1.28;
-	float lean = gust * (0.20 + hanging * 0.78 + max(upper_growth, mid_bank) * 0.57 + max(reeds, near_bank) * 1.10);
-	// Sampling against the gust shifts the painted leaves downwind.
-	vec2 displacement = -movement * flutter * vec2(2.7, -0.85) - lean * vec2(1.8, 0.72);
-	vec2 moved = p + round(displacement * green) * texel;
-	vec3 tip = texture(TEXTURE, moved).rgb;
-	if (foliage_color(tip) > 0.12) {
-		art = tip;
+	if (!independent_prop) {
+		float hanging = fringe(p, vec2(0.162, 0.089), vec2(0.245, 0.142));
+		float upper_growth = max(fringe(p, vec2(0.42, 0.17), vec2(0.087, 0.086)),
+			fringe(p, vec2(0.72, 0.16), vec2(0.11, 0.11)));
+		float reeds = fringe(p, vec2(0.055, 0.82), vec2(0.115, 0.19));
+		float near_bank = max(fringe(p, vec2(0.709, 0.843), vec2(0.125, 0.129)),
+			fringe(p, vec2(0.88, 0.659), vec2(0.086, 0.118)));
+		float mid_bank = fringe(p, vec2(0.464, 0.306), vec2(0.087, 0.063));
+		float gust = wind_at(p.x);
+		float flutter = 0.80 + gust * 0.75;
+		float movement = hanging * branch_sway(p);
+		movement += max(upper_growth, mid_bank) * branch_sway(p + vec2(0.12, 0.04));
+		movement += max(reeds, near_bank) * branch_sway(p + vec2(0.24, 0.03)) * 1.28;
+		float lean = gust * (0.20 + hanging * 0.78 + max(upper_growth, mid_bank) * 0.57 + max(reeds, near_bank) * 1.10);
+		// Sampling against the gust shifts the painted leaves downwind.
+		vec2 displacement = -movement * flutter * vec2(2.7, -0.85) - lean * vec2(1.8, 0.72);
+		vec2 moved = p + round(displacement * green) * texel;
+		vec3 tip = texture(TEXTURE, moved).rgb;
+		if (foliage_color(tip) > 0.12) {
+			art = tip;
+		}
 	}
 	// The forest recedes away from the creek while the interactive layer stays crisp.
 	float distance_to_creek = abs(p.y - (0.55 - p.x * 0.17));
@@ -118,5 +134,5 @@ void fragment() {
 	float soaked = rain_wetness * (0.66 + patches * 0.34);
 	land *= mix(vec3(1.0), vec3(0.74, 0.81, 0.89), soaked);
 	land += vec3(0.046, 0.062, 0.059) * soaked * green * smoothstep(0.47, 0.68, value);
-	COLOR = vec4(land, 1.0);
+	COLOR = vec4(land, independent_prop ? silhouette : 1.0);
 }

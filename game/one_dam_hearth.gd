@@ -8,7 +8,9 @@ const LOGS := [
 	Vector4(-8, -1.0, 1.0, 2.8), Vector4(-2, 2.6, 8.0, -1.0),
 	Vector4(-5, 1.8, 2.5, -3.3),
 ]
-const ROOTS := [Vector2(-4.1, -0.4), Vector2(0.2, -1.2), Vector2(3.75, 0.7)]
+# Each source records the supporting log, the fraction along it, and the gap above its front edge.
+const SOURCES := [Vector3(0, 0.27, -0.85), Vector3(1, 0.50, -0.92), Vector3(1, 0.80, -0.82)]
+const PROFILES := [Vector3(0.82, -1.05, 0.65), Vector3(1.77, 0.75, 0.85), Vector3(1.18, 1.85, -0.65)]
 const TONGUE_SIZES := [Vector2(11.0, 1.9), Vector2(15.2, 2.5), Vector2(9.3, 1.5)]
 
 class Tongue:
@@ -72,7 +74,7 @@ func reset() -> void:
 	firelight = 0.0
 	light_due = 0.0
 	light_target = 1.0
-	for i in ROOTS.size():
+	for i in SOURCES.size():
 		var tongue := Tongue.new()
 		tongue.shape = Vector3(0.92 + i * 0.06, 1.0, i * 0.44 - 0.50)
 		tongue.target = tongue.shape
@@ -163,7 +165,7 @@ func advance_flame(dt: float, gust: float, flutter: float) -> void:
 	spark_due -= dt
 	if heat > 0.24 and spark_due <= 0.0:
 		var spark := Spark.new()
-		spark.at = CENTER + ROOTS[rng.randi_range(0, ROOTS.size() - 1)] - Vector2(0.0, 2.0)
+		spark.at = flame_root(rng.randi_range(0, SOURCES.size() - 1)) - Vector2(0.0, 2.0)
 		spark.drift = Vector2(rng.randf_range(-2.6, 2.1), -rng.randf_range(10.0, 15.0))
 		spark.life = rng.randf_range(0.45, 0.90)
 		sparks.append(spark)
@@ -230,11 +232,8 @@ func draw_fuel(canvas: Node2D) -> void:
 	if wood > 0.0:
 		var count := clampi(2 + floori(wood), 2, LOGS.size())
 		for i in count:
-			var log: Vector4 = LOGS[i]
-			var center := Vector2(log.x + log.z, log.y + log.w) * 0.5
-			var extent := lerpf(0.75, 1.0, clampf(wood, 0.0, 1.0)) if i < 2 else 1.0
-			var at := CENTER + center.lerp(Vector2(log.x, log.y), extent)
-			var tip := CENTER + center.lerp(Vector2(log.z, log.w), extent)
+			var at := log_point(i, 0.0)
+			var tip := log_point(i, 1.0)
 			var bark := Color("#8b714e") if i % 2 == 0 else Color("#71583e")
 			var charred := clampf(ash * 0.8 + (0.42 if burning else 0.0), 0.0, 0.81)
 			canvas.draw_line(snap(at + Vector2(0, 0.8)), snap(tip + Vector2(0, 0.8)), Color("#2d2420"), 2.0)
@@ -249,32 +248,51 @@ func draw_fuel(canvas: Node2D) -> void:
 		var ember := clampf(firelight * (0.76 + 0.18 * sin(clock * (1.8 + i * 0.52) + i)), 0.0, 1.0)
 		canvas.draw_rect(Rect2(snap(pos), Vector2(1.5 if i % 3 == 0 else 0.5, 0.5)), Color(Color("#974631"), ember))
 
+func log_point(index: int, fraction: float) -> Vector2:
+	var log: Vector4 = LOGS[index]
+	var a := Vector2(log.x, log.y)
+	var b := Vector2(log.z, log.w)
+	var extent := lerpf(0.75, 1.0, clampf(wood, 0.0, 1.0)) if index < 2 else 1.0
+	return CENTER + a.lerp(b, 0.5 + (fraction - 0.5) * extent)
+
+func flame_root(index: int) -> Vector2:
+	var source: Vector3 = SOURCES[index]
+	return log_point(int(source.x), source.y) + Vector2(0, source.z)
+
 func draw_flame(canvas: Node2D) -> void:
 	draw_smoke(canvas)
 	for i in tongues.size():
 		var tongue := tongues[i]
 		var size: Vector2 = TONGUE_SIZES[i]
-		var root: Vector2 = CENTER + ROOTS[i]
+		var root := flame_root(i)
 		var lift := tongue.flare_amount()
 		var height := heat * size.x * tongue.shape.x * (1.0 + lift * 0.29)
 		var width := size.y * (0.58 + heat * 0.47) * tongue.shape.y
-		draw_tongue(canvas, root, height, width, tongue.shape.z, lift if tongue.split else 0.0)
+		draw_tongue(canvas, root, height, width, tongue.shape.z, lift if tongue.split else 0.0, PROFILES[i])
+	if heat > 0.025 and wood > 0.0:
+		# The near lip of the crosswise log occludes the roots without masking the coal bed.
+		var at := snap(log_point(1, 0.36))
+		var tip := snap(log_point(1, 0.89))
+		var bark := Color("#3f2a21").lerp(Color("#865136"), firelight * 0.48)
+		canvas.draw_line(at, tip, bark, 0.75)
 	for spark in sparks:
 		var age := spark.age / spark.life
 		var ink := Color("#e6a55d").lerp(Color("#a65339"), age)
 		canvas.draw_rect(Rect2(snap(spark.at), Vector2(0.5, 0.5)), Color(ink, (1.0 - age) * 0.79))
 
-func draw_tongue(canvas: Node2D, root: Vector2, height: float, width: float, curl: float, split: float) -> void:
+func draw_tongue(canvas: Node2D, root: Vector2, height: float, width: float, curl: float, split: float,
+		profile: Vector3) -> void:
 	var rows := roundi(height * 2.0)
 	for row in rows:
 		var rise := row * 0.5
 		var level := float(row) / maxi(1, rows - 1)
-		var bend := lean * level * level + curl * sin(level * 4.1) * level * 2.9
-		var belly := 0.86 + sin(level * 5.3 + curl) * 0.20
-		var span := maxf(0.25, width * belly * (1.0 - pow(level, 1.45)))
+		var free_tip := level * smoothstep(0.17, 0.79, level)
+		var bend := free_tip * (lean + sin(level * 4.6 + profile.y) * (curl * 1.9 + profile.z))
+		var belly := 0.87 + sin(level * 6.25 + profile.y + curl * 0.55) * 0.22
+		var span := maxf(0.25, width * belly * pow(maxf(0.0, 1.0 - level), profile.x))
 		var center := snap(root + Vector2(bend, -rise))
 		var left := roundf((center.x - span * (1.02 + level * curl * 0.25)) * 2.0) * 0.5
-		var right := roundf((center.x + span * 0.91) * 2.0) * 0.5
+		var right := roundf((center.x + span * (0.91 + free_tip * profile.z * 0.27)) * 2.0) * 0.5
 		var outer := Color("#ba623c") if level < 0.70 else Color("#c97542")
 		canvas.draw_rect(Rect2(Vector2(left, center.y), Vector2(maxf(0.5, right - left), 0.5)), outer)
 		if span > 0.45 and level < 0.85:

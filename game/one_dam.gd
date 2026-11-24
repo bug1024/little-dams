@@ -28,6 +28,8 @@ var scene := View.new()
 var gate := Button.new()
 var rain_button := Button.new()
 var music_button := Button.new()
+var controls_art := Controls.new()
+var music_enabled := true
 var creek: AudioStreamPlayer
 var music: AudioStreamPlayer
 var clack: AudioStreamPlayer
@@ -147,15 +149,12 @@ func build_controls() -> void:
 	actions.add_theme_constant_override("separation", 12)
 	actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	overlay.add_child(actions)
-	var art := Controls.new()
 	var reset := Button.new()
-	art.configure(gate, "放水", Controls.Action.RELEASE, opening)
+	controls_art.configure(gate, "放水", Controls.Action.RELEASE, opening, "空格")
 	gate.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
-	art.configure(reset, "重来", Controls.Action.RESTART, restart)
-	art.configure(rain_button, "下雨", Controls.Action.RAIN, toggle_rain)
-	art.configure(music_button, "音乐开", Controls.Action.MUSIC, toggle_music)
-	music_button.toggle_mode = true
-	music_button.set_pressed_no_signal(true)
+	controls_art.configure(reset, "重来", Controls.Action.RESTART, restart, "R")
+	controls_art.configure(rain_button, "下雨", Controls.Action.RAIN, toggle_rain)
+	controls_art.configure(music_button, "音乐开", Controls.Action.MUSIC, toggle_music)
 	actions.add_child(gate)
 	actions.add_child(reset)
 	actions.add_child(rain_button)
@@ -169,9 +168,10 @@ func build_controls() -> void:
 	actions.offset_bottom = -margin.y
 
 func toggle_music() -> void:
-	var enabled := music_button.button_pressed
-	music.stream_paused = not enabled
-	music_button.text = "音乐开" if enabled else "音乐关"
+	music_enabled = not music_enabled
+	music.stream_paused = not music_enabled
+	music_button.text = "音乐开" if music_enabled else "音乐关"
+	controls_art.set_music_enabled(music_button, music_enabled)
 
 func audio(path: String, volume: float, loop := false) -> AudioStreamPlayer:
 	var player := AudioStreamPlayer.new()
@@ -196,6 +196,7 @@ func restart() -> void:
 	lower.reset()
 	scene.clear()
 	rain_button.text = "下雨"
+	controls_art.set_rain_active(rain_button, false)
 	if rain_audio != null:
 		rain_audio.stop()
 	if frog_audio != null:
@@ -227,6 +228,7 @@ func restart() -> void:
 func toggle_rain() -> void:
 	scene.rain.enabled = not scene.rain.enabled
 	rain_button.text = "停雨" if scene.rain.enabled else "下雨"
+	controls_art.set_rain_active(rain_button, scene.rain.enabled)
 	if scene.rain.enabled and rain_audio != null and not rain_audio.playing:
 		rain_audio.volume_db = -60.0
 		rain_audio.play()
@@ -250,10 +252,7 @@ func _process(delta: float) -> void:
 	scene.advance(delta)
 	var pointer := stage_pointer(get_global_mouse_position())
 	update_grab(pointer)
-	scene.hovered = find_piece(pointer)
-	scene.hovered_floater = scene.floater_at(pointer)
-	if scene.hovered != null and scene.hovered_floater != null and scene.hovered_floater.forage == View.Forage.NONE:
-		scene.hovered_floater = null
+	update_hover(pointer)
 	gate.disabled = model.wall.is_empty() and lower.wall.is_empty()
 	var fade := maxf(0.001, smoothstep(0.0, 1.3, scene.clock))
 	music.volume_db = -20.0 + linear_to_db(fade)
@@ -269,6 +268,37 @@ func _process(delta: float) -> void:
 		rain_audio.volume_db = -27.0 + linear_to_db(maxf(0.001, scene.rain.intensity))
 		if not scene.rain.enabled and scene.rain.intensity <= 0.0:
 			rain_audio.stop()
+
+func update_hover(pointer: Vector2) -> void:
+	scene.hovered = null
+	scene.hovered_floater = null
+	scene.hovered_pipe = null
+	scene.hovered_animal = Vector3.ZERO
+	scene.hovered_hearth = false
+	if held != null or held_floater != null or held_pipe != null or scene.holding_animal():
+		return
+	if get_viewport().gui_get_hovered_control() != null:
+		return
+	var pipe := scene.pipe_at(pointer)
+	if pipe != null:
+		scene.hovered_pipe = pipe
+		return
+	var animal := scene.animal_hover_target(pointer)
+	if animal.z > 0.0:
+		scene.hovered_animal = animal
+		return
+	if scene.hearth.contains(pointer) and scene.hearth.can_ignite():
+		scene.hovered_hearth = true
+		return
+	var forage := scene.floater_at(pointer)
+	if forage != null and forage.forage != View.Forage.NONE:
+		scene.hovered_floater = forage
+		return
+	var piece := find_piece(pointer)
+	if piece != null and piece != gate_plug:
+		scene.hovered = piece
+	elif forage != null:
+		scene.hovered_floater = forage
 
 func find_piece(point: Vector2) -> Pool.Piece:
 	var closest: Pool.Piece
@@ -438,21 +468,38 @@ func begin_floater_grab(item: View.Floater, point: Vector2) -> void:
 
 func update_grab(point: Vector2) -> void:
 	scene.pointer = point
+	scene.preview_support = null
+	scene.preview_pipe_host = null
+	scene.preview_bank_drop = false
+	scene.preview_active = false
+	scene.pry_mode = false
 	if held_pipe != null:
-		scene.clear_drop = pipe_host_at(point) != null or can_return_to_bank(point)
+		scene.preview_pipe_host = pipe_host_at(point)
+		scene.preview_bank_drop = can_return_to_bank(point)
+		scene.clear_drop = scene.preview_pipe_host != null or scene.preview_bank_drop
+		scene.preview_active = true
 		return
 	if scene.holding_animal():
 		scene.clear_drop = scene.can_place_animal(point)
+		scene.preview_active = true
 		return
 	if held_floater != null:
 		scene.clear_drop = scene.can_place_floater(held_floater, point)
+		scene.preview_active = true
 		return
 	if held == null:
 		return
 	var support := support_at(point, held)
 	var target := drop_point(point, support)
-	scene.clear_drop = grab.distance_to(point) >= 5.0 and (
-		can_drop(held, target, support) or can_return_to_bank(point))
+	var dragged := grab.distance_to(point) >= 5.0
+	scene.pry_mode = not from_bank and not dragged
+	var valid_water := dragged and can_drop(held, target, support)
+	var valid_bank := dragged and can_return_to_bank(point)
+	scene.clear_drop = valid_water or valid_bank
+	scene.preview_support = support if valid_water else null
+	scene.preview_target = target
+	scene.preview_bank_drop = valid_bank and not valid_water
+	scene.preview_active = scene.pry_mode or dragged
 	scene.preview_lift = 0.0 if support == null else support.radius * 0.66
 
 func cancel_grab() -> void:
@@ -462,6 +509,11 @@ func cancel_grab() -> void:
 	scene.held = null
 	held_floater = null
 	scene.held_floater = null
+	scene.preview_support = null
+	scene.preview_pipe_host = null
+	scene.preview_bank_drop = false
+	scene.preview_active = false
+	scene.pry_mode = false
 	scene.cancel_animal_grab()
 	Input.set_default_cursor_shape(Input.CURSOR_ARROW)
 

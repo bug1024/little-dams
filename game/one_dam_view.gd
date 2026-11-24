@@ -11,6 +11,7 @@ const Rain = preload("res://game/one_dam_rain.gd")
 const GroundInsects = preload("res://game/one_dam_ground_insects.gd")
 const Frog = preload("res://game/one_dam_frog.gd")
 const Hearth = preload("res://game/one_dam_hearth.gd")
+const Scenery = preload("res://game/one_dam_scenery.gd")
 const SIZE := Vector2(320, 200)
 const CHANNEL_MASK := preload("res://game/one_dam_channel.png")
 const PLATE := preload("res://game/one_dam_plate.png")
@@ -83,10 +84,19 @@ var hovered_floater: Floater
 var droplets: Array[Vector4] = []
 var ripples: Array[Vector4] = []
 var hovered: Pool.Piece
+var hovered_pipe: Pool.DrainPipe
+var hovered_animal := Vector3.ZERO
+var hovered_hearth := false
 var held: Pool.Piece
 var pointer := Vector2.ZERO
 var clear_drop := false
 var preview_lift := 0.0
+var preview_support: Pool.Piece
+var preview_target := Vector2.ZERO
+var preview_pipe_host: Pool.Piece
+var preview_bank_drop := false
+var preview_active := false
+var pry_mode := false
 var clock := 0.0
 var streaks := PackedVector2Array()
 var water_pixels := Image.create_empty(Flow.COLUMNS, Flow.ROWS, false, Image.FORMAT_RGBA8)
@@ -99,10 +109,12 @@ var frog := Frog.new()
 var wind := Wind.new()
 var rain := Rain.new()
 var hearth := Hearth.new()
-var painted_ground := PLATE.get_image()
+var scenery := Scenery.new()
+var painted_ground := Scenery.GROUND.get_image()
 var air := Air.new()
 var rock_art := RockArt.new()
 var hearth_rim: Array[Pool.Piece] = []
+var hearth_warm_faces: Dictionary[Pool.Piece, ImageTexture] = {}
 var shore_memory := PackedFloat32Array()
 var bed_deposit := PackedFloat32Array()
 var surface_travel := PackedVector2Array()
@@ -122,7 +134,9 @@ var last_crest_x := -1.0
 func _ready() -> void:
 	for stone: Vector3 in [Vector3(-13, 0, 3.2), Vector3(-8, -5, 3.9), Vector3(2, -6, 2.9),
 			Vector3(12, -2, 3.4), Vector3(10, 4, 2.5), Vector3(-5, 5, 2.7)]:
-		hearth_rim.append(Pool.Piece.new(Vector2(stone.x, stone.y), stone.z, Pool.STONE, hearth_rim.size() % 4))
+		var rim := Pool.Piece.new(Vector2(stone.x, stone.y), stone.z, Pool.STONE, hearth_rim.size() % 4)
+		hearth_rim.append(rim)
+		hearth_warm_faces[rim] = make_hearth_warm_face(rim)
 	shore_memory.resize(Flow.COUNT)
 	bed_deposit.resize(Flow.COUNT)
 	quiet_flow.resize(Flow.COLUMNS)
@@ -149,11 +163,16 @@ func _ready() -> void:
 		material.set_shader_parameter("flow_state", flow_texture)
 		material.set_shader_parameter("shore_memory", shore_texture)
 	var ground := background.duplicate() as Sprite2D
+	ground.name = &"TerrainPlate"
+	ground.texture = Scenery.GROUND
 	ground.z_index = -2
 	ground.material = ground_light
 	add_child(ground)
+	background.name = &"WaterSurface"
 	background.material = surface
 	add_child(background)
+	scenery.install(self, ground_light)
+	scenery.foreground.draw.connect(draw_shore_foreground)
 
 	summer.wind = wind
 	summer.fish_surface.connect(func(point: Vector2) -> void:
@@ -189,6 +208,8 @@ func on_bank(point: Vector2) -> bool:
 func rain_contact(point: Vector2) -> Rain.Contact:
 	if not on_bank(point) and is_wet(from_screen(point)):
 		return Rain.Contact.WATER
+	if scenery.plant_at(point):
+		return Rain.Contact.LEAVES
 	var pixel := Vector2i(point / SIZE * Vector2(painted_ground.get_size()))
 	var paint := painted_ground.get_pixelv(pixel)
 	if paint.g - paint.b > 0.065 and paint.g > paint.r * 0.89:
@@ -250,6 +271,14 @@ func clear() -> void:
 		streaks.append(streak_origin(i, 0.0))
 	held = null
 	hovered = null
+	hovered_pipe = null
+	hovered_animal = Vector3.ZERO
+	hovered_hearth = false
+	preview_support = null
+	preview_pipe_host = null
+	preview_bank_drop = false
+	preview_active = false
+	pry_mode = false
 
 func burst(point: Vector2, strength: float) -> void:
 	var screen := to_screen(point)
@@ -594,6 +623,7 @@ func sync_surface(dt: float) -> void:
 func advance(dt: float) -> void:
 	clock += dt
 	wind.advance(dt)
+	scenery.advance(dt, wind, rain.wetness, rain.intensity)
 	hearth.advance(dt, rain.intensity, wind)
 	advance_surge(dt)
 	advance_riffle(dt)
@@ -741,6 +771,41 @@ func pool_profile(basin: Pool, fallback: float) -> Vector2:
 	var head := maxf(0.0, water.pool_head(center) - water.channel_depth(center + 19.0))
 	return Vector2(center / SIZE.x, head if not basin.wall.is_empty() else 0.0)
 
+func animal_hover_target(point: Vector2) -> Vector3:
+	var mole_pos := ground_insects.mole.position - Vector2(0, ground_insects.mole.elevation)
+	var mantis_pos := ground_insects.mantis.position - Vector2(0, ground_insects.mantis.elevation)
+	var mole_dist := mole_pos.distance_to(point)
+	var mantis_dist := mantis_pos.distance_to(point)
+	if mole_dist <= 5.0 and mole_dist <= mantis_dist:
+		return Vector3(mole_pos.x, mole_pos.y, 5.5)
+	if mantis_dist <= 7.0:
+		return Vector3(mantis_pos.x, mantis_pos.y, 7.5)
+	if summer.cicada_position.distance_to(point) <= 5.5:
+		return Vector3(summer.cicada_position.x, summer.cicada_position.y, 5.5)
+	if summer.insect_position.distance_to(point) <= 9.0:
+		return Vector3(summer.insect_position.x, summer.insect_position.y, 5.5)
+	var frog_pos := frog.screen_point()
+	if frog_pos.distance_to(point) <= 7.0:
+		return Vector3(frog_pos.x, frog_pos.y, 6.0)
+	if summer.fish_time >= 0.25:
+		var fish_pos := to_screen(summer.fish)
+		if fish_pos.distance_to(point) <= 7.0:
+			return Vector3(fish_pos.x, fish_pos.y, 6.5)
+	return Vector3.ZERO
+
+func env_modulate(screen_pos: Vector2) -> Color:
+	var uv := (screen_pos / SIZE).clamp(Vector2.ZERO, Vector2.ONE)
+	var shade := Wind.canopy_cover(uv)
+	var sun_factor := (0.62 + wind.sunlight.z * 0.38) * (1.0 - rain.intensity * 0.75)
+	var light := Color.WHITE.lerp(Color(0.84, 0.89, 0.95), shade * 0.42)
+	light = light.lerp(Color(1.04, 1.01, 0.95), (1.0 - shade) * sun_factor * 0.22)
+	light *= Color.WHITE.lerp(Color(0.75, 0.82, 0.90), rain.wetness * 0.82)
+	return Color(light.r, light.g, light.b, 1.0)
+
+func shade_color(base: Color, screen_pos: Vector2) -> Color:
+	var mod := env_modulate(screen_pos)
+	return Color(base.r * mod.r, base.g * mod.g, base.b * mod.b, base.a)
+
 func _draw() -> void:
 	if water == null:
 		return
@@ -752,14 +817,16 @@ func _draw() -> void:
 	draw_ripples()
 	draw_shore_bubbles()
 	rain.draw_puddles(self)
-	summer.draw_land(self)
+	summer.draw_land(self, shade_color)
 	var hearth_hover := hearth.contains(pointer) and (hearth.can_ignite() if held_floater == null else can_fuel_hearth(held_floater))
 	hearth.draw_bed(self, hearth_hover)
+	if hovered_hearth:
+		draw_hover_halo(self, Hearth.CENTER, Hearth.RADIUS.x + 1.5, Hearth.RADIUS.y + 1.5, Color("#f2bd74"))
 	hearth.draw_fuel(self)
 	for stone in hearth_rim:
 		var reflection := hearth.firelight * (1.0 - smoothstep(5.0, 16.0, stone.point.length()))
 		draw_rock(stone, Hearth.CENTER + stone.point, 0.0, maxf(hearth.dampness * 0.5, rain.wetness * 0.24), 0.0, true, 0.83, reflection)
-	ground_insects.draw(self, pointer, true)
+	ground_insects.draw(self, pointer, true, scenery.in_front_of_ledge, false, shade_color)
 	draw_materials()
 	draw_pipes()
 	draw_seams(model)
@@ -768,15 +835,25 @@ func _draw() -> void:
 	draw_breach_jet(lower_breach)
 	draw_froth()
 	draw_floaters()
-	ground_insects.draw(self, pointer, false)
-	summer.draw_insect(self, pointer)
-	summer.draw_cicada(self, pointer)
+	ground_insects.draw(self, pointer, false, scenery.in_front_of_ledge, false, shade_color)
+	summer.draw_insect(self, pointer, shade_color)
+	summer.draw_cicada(self, pointer, shade_color)
 	summer.draw_fish(self, to_screen, pointer, true)
-	frog.draw(self, pointer)
+	if not scenery.in_front_of_ledge(pointer if frog.held else frog.position):
+		frog.draw(self, pointer, shade_color)
 	hearth.draw_flame(self)
-	rain.draw_drops(self)
-	if holding_animal():
-		draw_drop_hint()
+
+func draw_shore_foreground() -> void:
+	var layer := scenery.foreground
+	ground_insects.draw(layer, pointer, true, scenery.in_front_of_ledge, true, shade_color)
+	ground_insects.draw(layer, pointer, false, scenery.in_front_of_ledge, true, shade_color)
+	if scenery.in_front_of_ledge(pointer if frog.held else frog.position):
+		frog.draw(layer, pointer, shade_color)
+	rain.draw_drops(layer)
+	if hovered_animal.z > 0.0:
+		draw_hover_halo(layer, Vector2(hovered_animal.x, hovered_animal.y), hovered_animal.z, hovered_animal.z * 0.78)
+	if holding_animal() or held != null or held_pipe != null or held_floater != null:
+		draw_drop_hint(layer)
 
 func draw_pond_edge(basin: Pool, fallback: float) -> void:
 	if basin.wall.is_empty():
@@ -948,25 +1025,43 @@ func draw_pipes() -> void:
 		var reach := pipe.reach()
 		var start := snap_pixel(center - Vector2(reach, 0.5))
 		var end := snap_pixel(center + Vector2(reach, 0.5))
+		if pipe.host == null and pipe != held_pipe:
+			draw_line(start + Vector2(0.5, 2.0), end + Vector2(1.5, 2.5), Color("#26281e70"), 2.5)
 		if pipe.host != null and pipe != held_pipe:
 			var buried := Vector2(pipe.host.radius * 0.58, 0.0)
-			draw_pipe_shaft(start, snap_pixel(center - buried))
-			draw_pipe_shaft(snap_pixel(center + buried), end)
+			var buried_l := snap_pixel(center - buried)
+			var buried_r := snap_pixel(center + buried)
+			draw_pipe_shaft(start, buried_l, false)
+			draw_pipe_shaft(buried_r, end, false)
+			var mud_collar := shade_color(Color("#2f241cc8"), center)
+			draw_line(buried_l - Vector2(0, 1.5), buried_l + Vector2(0, 1.5), mud_collar, 1.5)
+			draw_line(buried_r - Vector2(0, 1.5), buried_r + Vector2(0, 1.5), mud_collar, 1.5)
 		else:
-			draw_pipe_shaft(start, end)
-		draw_rect(Rect2(start - Vector2(0.5, 1.5), Vector2(1.5, 3.0)), Color("#80604d"))
-		draw_rect(Rect2(end - Vector2(0.5, 1.5), Vector2(2.0, 3.0)), Color("#9a8870"))
-		draw_rect(Rect2(end, Vector2(1.0, 1.0)), Color("#313232"))
+			draw_pipe_shaft(start, end, true)
+		draw_rect(Rect2(start - Vector2(0.5, 1.5), Vector2(1.5, 3.0)), shade_color(Color("#9e9564"), start))
+		draw_rect(Rect2(start - Vector2(0.5, 0.75), Vector2(0.75, 1.5)), Color("#242820"))
+		draw_rect(Rect2(end - Vector2(0.5, 1.5), Vector2(2.0, 3.0)), shade_color(Color("#b3a872"), end))
+		draw_rect(Rect2(end - Vector2(0.0, 0.75), Vector2(1.25, 1.5)), Color("#1d2624"))
+		draw_rect(Rect2(end + Vector2(0.25, 0.25), Vector2(0.5, 0.5)), Color("#6a8f85"))
+		if pipe == hovered_pipe and held_pipe == null:
+			draw_hover_halo(self, center, reach + 2.5, 4.5)
 		if pipe != held_pipe and pipe.rate > 0.012:
 			draw_pipe_outflow(pipe, end)
-	if held_pipe != null:
-		draw_drop_hint()
 
-func draw_pipe_shaft(start: Vector2, end: Vector2) -> void:
-	draw_line(start + Vector2(0, 1.5), end + Vector2(0, 1.5), Color("#242e2e91"), 3.0)
-	draw_line(start, end, Color("#333b3b"), 3.5)
-	draw_line(start + Vector2(0, -0.5), end + Vector2(0, -0.5), Color("#768277"), 2.0)
-	draw_line(start + Vector2(0.5, -1.0), end + Vector2(-1.0, -1.0), Color("#a4aa8e"), 0.5)
+func draw_pipe_shaft(start: Vector2, end: Vector2, full_span := true) -> void:
+	var mid := start.lerp(end, 0.5)
+	draw_line(start + Vector2(0, 1.5), end + Vector2(0, 1.5), Color("#1e282475"), 3.0)
+	draw_line(start, end, shade_color(Color("#2c2a1d"), mid), 3.5)
+	draw_line(start + Vector2(0, -0.25), end + Vector2(0, -0.25), shade_color(Color("#787549"), mid), 2.5)
+	draw_line(start + Vector2(0, -0.75), end + Vector2(0, -0.75), shade_color(Color("#a49d67"), mid), 1.0)
+	draw_line(start + Vector2(0.5, -1.0), end + Vector2(-1.0, -1.0), shade_color(Color("#c9c087"), mid), 0.5)
+	draw_line(start + Vector2(0.5, 1.0), end + Vector2(-0.5, 1.0), shade_color(Color("#3c3926"), mid), 0.75)
+	var span := end.x - start.x
+	var nodes := [0.34, 0.67] if full_span else ([0.45] if span >= 4.5 else [])
+	for t: float in nodes:
+		var node_at := snap_pixel(start.lerp(end, t))
+		draw_line(node_at - Vector2(0, 1.5), node_at + Vector2(0, 1.5), shade_color(Color("#3a3622"), node_at), 0.75)
+		draw_line(node_at + Vector2(0.5, -1.25), node_at + Vector2(0.5, 1.0), shade_color(Color("#b8ae78"), node_at), 0.5)
 
 func draw_pipe_outflow(pipe: Pool.DrainPipe, mouth: Vector2) -> void:
 	var strength := smoothstep(0.012, Flow.PIPE_CAPACITY * 0.83, pipe.rate)
@@ -1018,31 +1113,126 @@ func draw_materials() -> void:
 		p.x += piece.notch * 4.5
 		draw_piece(piece, p, piece.notch * 0.27, damp, submersion, piece.support == null, 0.84 if built else 1.0)
 		if piece == hovered:
-			draw_brackets(p, piece.radius)
+			draw_hover_halo(self, p, piece.radius + 2.5, piece.radius * 0.72 + 2.5)
 	for item in rolling:
 		var piece: Pool.Piece = item.piece
 		var p := to_screen(item.point) - Vector2(0, item.lift)
 		draw_piece(piece, p, item.turn if piece.kind == Pool.STONE else item.turn * 0.35, 0.8)
 	if held != null:
 		draw_piece(held, (pointer - Vector2(0, maxf(5.0, preview_lift))).round(), 0.0)
-		draw_drop_hint()
 
-func draw_drop_hint() -> void:
-	var center := snap_pixel((pointer + Vector2(0, 5)).clamp(Vector2(8, 2), SIZE - Vector2(8, 3)))
-	var bar := Rect2(center - Vector2(5.5, 1), Vector2(11, 2)) if clear_drop else Rect2(center - Vector2(6.5, 1.5), Vector2(13, 3))
-	var outline := Color("#173324") if clear_drop else Color("#4c151d")
-	var fill := Color("#8ae27b") if clear_drop else Color("#ff595f")
-	draw_rect(bar.grow(0.5), outline)
-	draw_rect(bar, fill)
-	draw_rect(Rect2(bar.position + Vector2(0.5, 0), Vector2(bar.size.x - 1, 0.5)),
-		Color("#ceffad") if clear_drop else Color("#ffc2ab"))
+func draw_drop_hint(canvas: Node2D) -> void:
+	if held != null:
+		if pry_mode:
+			draw_pry_arrow(canvas, piece_screen(held) + Vector2(held.radius + 3.5, 0.0))
+		elif preview_active:
+			if clear_drop:
+				if preview_support != null:
+					var base_pos := piece_screen(preview_support)
+					draw_dashed_ellipse(canvas, base_pos - Vector2(0, preview_support.radius * 0.15),
+						preview_support.radius * 0.72, preview_support.radius * 0.45,
+						Color("#ffd97d", 0.86), Color("#2b2416b0"))
+					draw_plus_badge(canvas, pointer - Vector2(0, maxf(7.0, preview_lift) + held.radius * 0.55))
+				else:
+					var spot := pointer if preview_bank_drop else to_screen(preview_target)
+					var in_water := not preview_bank_drop and is_wet(preview_target)
+					var ring := Color("#c7f2df", 0.84) if in_water else Color("#f2dfb2", 0.78)
+					draw_dashed_ellipse(canvas, snap_pixel(spot + Vector2(0, held.radius * 0.25)),
+						held.radius * 0.85, held.radius * 0.48, ring, Color("#1c2924a8"))
+			else:
+				var bad_at := snap_pixel((pointer + Vector2(0, 4.0)).clamp(Vector2(8, 2), SIZE - Vector2(8, 3)))
+				draw_dashed_ellipse(canvas, bad_at, held.radius * 0.75, held.radius * 0.42,
+					Color("#df7b68", 0.74), Color("#361915a8"))
+				draw_cross_badge(canvas, bad_at)
+	elif held_pipe != null:
+		if preview_pipe_host != null:
+			var host_p := piece_screen(preview_pipe_host)
+			var r_reach := maxf(11.0, preview_pipe_host.radius + 5.0)
+			var buried := preview_pipe_host.radius * 0.58
+			var ghost := Color("#f5dc96", 0.78)
+			canvas.draw_line(snap_pixel(host_p - Vector2(r_reach, 2.5)), snap_pixel(host_p - Vector2(buried, 2.5)), ghost, 2.0)
+			canvas.draw_line(snap_pixel(host_p + Vector2(buried, 2.5)), snap_pixel(host_p + Vector2(r_reach, 2.5)), ghost, 2.0)
+			draw_dashed_ellipse(canvas, host_p, preview_pipe_host.radius * 0.90, preview_pipe_host.radius * 0.58,
+				Color("#ffd97d", 0.86), Color("#2b2416b0"))
+			draw_plus_badge(canvas, host_p - Vector2(0, preview_pipe_host.radius * 0.75 + 2.0))
+		elif clear_drop:
+			draw_dashed_ellipse(canvas, snap_pixel(pointer), 9.5, 3.8, Color("#f2dfb2", 0.76), Color("#242920a8"))
+		else:
+			draw_cross_badge(canvas, pointer + Vector2(0, 3.0))
+	elif held_floater != null:
+		if hearth.contains(pointer):
+			if clear_drop:
+				draw_dashed_ellipse(canvas, Hearth.CENTER, Hearth.RADIUS.x + 1.0, Hearth.RADIUS.y + 1.0,
+					Color("#f7ba6e", 0.88), Color("#2b1c12b0"))
+				draw_plus_badge(canvas, Hearth.CENTER - Vector2(0, 9.0))
+			else:
+				draw_cross_badge(canvas, pointer + Vector2(0, 3.0))
+		elif held_floater.forage in [Forage.FLOWER, Forage.FOXTAIL] and decoration_host(pointer) != null:
+			var host := decoration_host(pointer)
+			draw_dashed_ellipse(canvas, piece_screen(host), host.radius * 0.75, host.radius * 0.45,
+				Color("#ffd97d", 0.84), Color("#2b2416b0"))
+			draw_plus_badge(canvas, pointer - Vector2(0, 7.0))
+		elif held_floater.forage == Forage.THIN_BRANCH and not on_bank(pointer):
+			if clear_drop:
+				draw_dashed_ellipse(canvas, snap_pixel(pointer + Vector2(0, 2.0)), 4.5, 2.4,
+					Color("#c7f2df", 0.82), Color("#1c2924a8"))
+			else:
+				draw_cross_badge(canvas, pointer + Vector2(0, 2.0))
+		elif not clear_drop:
+			draw_cross_badge(canvas, pointer + Vector2(0, 2.0))
+	elif holding_animal():
+		if clear_drop:
+			draw_dashed_ellipse(canvas, snap_pixel(pointer + Vector2(0, 2.0)), 4.5, 2.5,
+				Color("#f2dfb2", 0.76), Color("#1c2924a8"), 10)
+		else:
+			draw_cross_badge(canvas, pointer + Vector2(0, 2.0))
 
-func draw_brackets(p: Vector2, radius: float) -> void:
-	var color := Color(PAPER, 0.57)
-	for corner in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
-		var tip: Vector2 = (p + corner * Vector2(radius + 3, radius * 0.72 + 3)).round()
-		draw_line(tip, tip - Vector2(corner.x * 4, 0), color)
-		draw_line(tip, tip - Vector2(0, corner.y * 3), color)
+func draw_hover_halo(canvas: Node2D, center: Vector2, rx: float, ry: float, tint := PAPER) -> void:
+	var pulse := 0.72 + 0.28 * sin(clock * 4.5)
+	var shadow := Color(0.12, 0.11, 0.08, 0.48 * pulse)
+	var glow := Color(tint, 0.72 * pulse)
+	for base_angle: float in [0.28, PI * 0.5 + 0.28, PI + 0.28, PI * 1.5 + 0.28]:
+		var pts := PackedVector2Array()
+		var shadow_pts := PackedVector2Array()
+		for i in 4:
+			var a := base_angle + float(i) * 0.25
+			var pt := snap_pixel(center + Vector2(cos(a) * rx, sin(a) * ry))
+			pts.append(pt)
+			shadow_pts.append(pt + Vector2(0, 0.5))
+		canvas.draw_polyline(shadow_pts, shadow, 1.0)
+		canvas.draw_polyline(pts, glow, 0.5)
+
+func draw_dashed_ellipse(canvas: Node2D, center: Vector2, rx: float, ry: float, color: Color, outline: Color,
+		segments := 14) -> void:
+	for i in range(0, segments, 2):
+		var a0 := float(i) * TAU / segments
+		var a1 := float(i + 1) * TAU / segments
+		var p0 := snap_pixel(center + Vector2(cos(a0) * rx, sin(a0) * ry))
+		var p1 := snap_pixel(center + Vector2(cos(a1) * rx, sin(a1) * ry))
+		canvas.draw_line(p0, p1, outline, 1.0)
+		canvas.draw_line(p0, p1, color, 0.5)
+
+func draw_plus_badge(canvas: Node2D, at: Vector2) -> void:
+	var bob := snappedf(sin(clock * 5.0) * 0.5, 0.5)
+	var c := snap_pixel(at.clamp(Vector2(6, 6), SIZE - Vector2(6, 6)) + Vector2(0, bob))
+	canvas.draw_rect(Rect2(c - Vector2(2.5, 1.0), Vector2(5.0, 2.0)), Color("#2b2416d0"))
+	canvas.draw_rect(Rect2(c - Vector2(1.0, 2.5), Vector2(2.0, 5.0)), Color("#2b2416d0"))
+	canvas.draw_rect(Rect2(c - Vector2(2.0, 0.5), Vector2(4.0, 1.0)), Color("#ffd97d"))
+	canvas.draw_rect(Rect2(c - Vector2(0.5, 2.0), Vector2(1.0, 4.0)), Color("#ffd97d"))
+
+func draw_cross_badge(canvas: Node2D, at: Vector2) -> void:
+	var c := snap_pixel(at.clamp(Vector2(6, 6), SIZE - Vector2(6, 6)))
+	for s: float in [-1.0, 1.0]:
+		canvas.draw_line(c + Vector2(-1.5, -1.5 * s), c + Vector2(1.5, 1.5 * s), Color("#331815d0"), 1.5)
+		canvas.draw_line(c + Vector2(-1.5, -1.5 * s), c + Vector2(1.5, 1.5 * s), Color("#e07b67"), 0.75)
+
+func draw_pry_arrow(canvas: Node2D, at: Vector2) -> void:
+	var pulse := fposmod(clock * 2.2, 1.0)
+	var c := snap_pixel(at + Vector2(pulse * 2.0, 0.0))
+	var col := Color(FOAM, 0.85 * (1.0 - pulse * 0.35))
+	var pts := PackedVector2Array([c + Vector2(-1.5, -2.0), c + Vector2(0.5, 0.0), c + Vector2(-1.5, 2.0)])
+	canvas.draw_polyline(pts, Color("#1b332ed0"), 1.5)
+	canvas.draw_polyline(pts, col, 0.75)
 
 func draw_floaters() -> void:
 	for item in floaters:
@@ -1060,21 +1250,53 @@ func draw_floaters() -> void:
 			draw_line(snap_pixel(tail - spread), snap_pixel(tail - axis * 5.0 - spread * 1.8), wake, 0.5)
 		if item.twig:
 			var axis := Vector2.from_angle(item.angle)
-			var tail := (point - axis * 7.0).round()
-			var tip := (point + axis * 7.0).round()
-			draw_line(tail + Vector2(0, 1), tip + Vector2(0, 1), Color("#422f23"), 3.0)
-			draw_line(tail, tip, Color("#956044"), 2.0)
-			draw_line(point.round(), (point + Vector2(4, -4).rotated(item.angle)).round(), Color("#bd9060"), 1.0)
+			var side := axis.orthogonal()
+			var tail := snap_pixel(point - axis * 7.5)
+			var bend := snap_pixel(point + side * 0.8)
+			var tip := snap_pixel(point + axis * 7.0 + side * 0.4)
+			var shadow_col := Color("#1c2f295c") if (item.afloat and not carried) else Color("#2b261c66")
+			if not carried:
+				draw_polyline(PackedVector2Array([tail + Vector2(0.5, 1.5), bend + Vector2(0.5, 1.5), tip + Vector2(0.5, 1.5)]), shadow_col, 2.0)
+			var bark_dark := shade_color(Color("#4a3628").darkened(item.soaked * 0.25), point)
+			var bark_lit := shade_color(Color("#987250").darkened(item.soaked * 0.35), point)
+			draw_polyline(PackedVector2Array([tail, bend, tip]), bark_dark, 2.0)
+			draw_polyline(PackedVector2Array([tail + Vector2(0, -0.5), bend + Vector2(0, -0.5), tip + Vector2(0, -0.5)]), bark_lit, 0.75)
+			var fork_a := snap_pixel(bend + Vector2(3.5, -3.2).rotated(item.angle))
+			var fork_b := snap_pixel(point - axis * 2.5 + Vector2(1.0, 2.6).rotated(item.angle))
+			draw_line(bend, fork_a, bark_dark, 1.25)
+			draw_line(bend + Vector2(0, -0.25), fork_a, bark_lit, 0.5)
+			draw_line(snap_pixel(point - axis * 2.5), fork_b, bark_lit.darkened(0.15), 0.75)
+			draw_rect(Rect2(tip - Vector2(0.5, 0.5), Vector2(1.0, 1.0)), shade_color(Color("#cfb286"), tip))
 		else:
+			var hue_key := fposmod(item.shore.x * 0.137 + item.shore.y * 0.271, 1.0)
+			var leaf_top := Color("#557545") if hue_key < 0.45 else (Color("#758643") if hue_key < 0.80 else Color("#9d8042"))
+			var leaf_edge := Color("#324026") if hue_key < 0.80 else Color("#4a3b22")
+			var vein_col := Color("#cad26e") if hue_key < 0.80 else Color("#d6bd7a")
+			var shadow_col := Color("#1b2e2a5c") if (item.afloat and not carried) else Color("#2e291e66")
+			var outline := PackedVector2Array()
 			var form := PackedVector2Array()
-			for corner in [Vector2(-5, 0), Vector2(-2, -2), Vector2(2, -2), Vector2(5, 0), Vector2(1, 3), Vector2(-2, 2)]:
-				form.append((point + corner.rotated(item.angle)).round())
-			draw_colored_polygon(form, Color("#557545"))
-			draw_line((point - Vector2(3, 0).rotated(item.angle)).round(), (point + Vector2(4, 0).rotated(item.angle)).round(), Color("#cad26e"), 1.0)
+			var upper := PackedVector2Array()
+			var corners: Array[Vector2] = [Vector2(-4.5, 0), Vector2(-2.5, -1.6), Vector2(-0.5, -2.3), Vector2(2.2, -2.0),
+				Vector2(4.8, -0.4), Vector2(5.4, 0.0), Vector2(2.4, 2.2), Vector2(-0.6, 2.3), Vector2(-2.7, 1.5)]
+			for corner: Vector2 in corners:
+				var rot := corner.rotated(item.angle)
+				outline.append(snap_pixel(point + rot + Vector2(0.5, 1.0)))
+				form.append(snap_pixel(point + rot))
+			for corner: Vector2 in [Vector2(-4.2, 0), Vector2(-2.5, -1.5), Vector2(-0.5, -2.1), Vector2(2.2, -1.8), Vector2(4.8, -0.2), Vector2(0.0, 0.0)]:
+				upper.append(snap_pixel(point + corner.rotated(item.angle)))
+			if not carried:
+				draw_colored_polygon(outline, shadow_col)
+			draw_colored_polygon(form, shade_color(leaf_edge, point))
+			draw_colored_polygon(upper, shade_color(leaf_top.lightened(0.10), point))
+			var stem_start := snap_pixel(point - Vector2(6.0, 0.0).rotated(item.angle))
+			var leaf_tip := snap_pixel(point + Vector2(4.5, 0.0).rotated(item.angle))
+			draw_line(stem_start, leaf_tip, shade_color(vein_col, point), 0.65)
+			for v: float in [-1.5, 1.0]:
+				var rib := point + Vector2(v, 0).rotated(item.angle)
+				draw_line(snap_pixel(rib), snap_pixel(rib + Vector2(1.4, -1.2).rotated(item.angle)), shade_color(vein_col, point), 0.5)
+				draw_line(snap_pixel(rib), snap_pixel(rib + Vector2(1.2, 1.3).rotated(item.angle)), shade_color(leaf_top.darkened(0.22), point), 0.5)
 		if item == hovered_floater and held_floater == null:
-			draw_brackets(point, 7.0)
-	if held_floater != null and (held_floater.forage != Forage.NONE or hearth.contains(pointer)):
-		draw_drop_hint()
+			draw_hover_halo(self, point, 7.5, 5.5)
 
 func forage_screen(item: Floater) -> Vector2:
 	return piece_screen(item.host) + item.host_offset if item.host != null else to_screen(item.point)
@@ -1106,34 +1328,34 @@ func draw_forage(item: Floater, carried: bool) -> void:
 			var spread := float(i) - 2.5
 			var strand := snap_pixel(base + direction * (6.2 + i % 3) + side * spread * 0.79)
 			var joint := snap_pixel(base + direction * 4.0 + side * spread * 0.29)
-			var straw := item.tint.darkened(item.soaked * 0.30 + (0.13 if i % 2 == 0 else 0.0))
+			var straw := shade_color(item.tint.darkened(item.soaked * 0.30 + (0.13 if i % 2 == 0 else 0.0)), base)
 			draw_polyline(PackedVector2Array([base, joint, strand]), straw, 0.5)
-		draw_line(base, snap_pixel(base + direction * 2.6), Color("#63523a"), 1.0)
+		draw_line(base, snap_pixel(base + direction * 2.6), shade_color(Color("#63523a"), base), 1.0)
 	elif item.forage == Forage.THIN_BRANCH:
 		var joint := snap_pixel((base + tip) * 0.5 - Vector2(0.5, 0))
-		draw_polyline(PackedVector2Array([base, joint, tip]), Color("#4f3e32"), 1.4)
-		draw_polyline(PackedVector2Array([base + Vector2(0.5, 0), joint, tip]), item.tint, 0.65)
+		draw_polyline(PackedVector2Array([base, joint, tip]), shade_color(Color("#4f3e32"), base), 1.4)
+		draw_polyline(PackedVector2Array([base + Vector2(0.5, 0), joint, tip]), shade_color(item.tint.darkened(item.soaked * 0.3), base), 0.65)
 		var twig_tip := snap_pixel(joint + axis * 0.24 + axis.normalized().orthogonal() * 2.8)
-		draw_line(joint, twig_tip, item.tint.darkened(0.15), 0.65)
+		draw_line(joint, twig_tip, shade_color(item.tint.darkened(0.15 + item.soaked * 0.3), base), 0.65)
 	else:
 		var along := axis.normalized()
 		var side := along.orthogonal()
 		var joint := snap_pixel(base.lerp(tip, 0.50) - side * 0.7)
-		draw_polyline(PackedVector2Array([base, joint, tip]), Color("#71814b"), 0.75)
-		draw_line(joint, snap_pixel(joint + along * 1.7 + side * 2.2), Color("#8e9b58"), 0.75)
+		draw_polyline(PackedVector2Array([base, joint, tip]), shade_color(Color("#71814b"), base), 0.75)
+		draw_line(joint, snap_pixel(joint + along * 1.7 + side * 2.2), shade_color(Color("#8e9b58"), base), 0.75)
 		if item.forage == Forage.FOXTAIL:
 			var seed_start := snap_pixel(tip - along * 4.4)
-			draw_line(seed_start, tip, item.tint.darkened(0.33), 2.5)
-			draw_line(snap_pixel(seed_start - side * 0.4), snap_pixel(tip - side * 0.4), item.tint, 1.5)
-			draw_line(snap_pixel(tip - along - side), snap_pixel(seed_start + along - side), item.tint.lightened(0.19), 0.5)
+			draw_line(seed_start, tip, shade_color(item.tint.darkened(0.33), base), 2.5)
+			draw_line(snap_pixel(seed_start - side * 0.4), snap_pixel(tip - side * 0.4), shade_color(item.tint, base), 1.5)
+			draw_line(snap_pixel(tip - along - side), snap_pixel(seed_start + along - side), shade_color(item.tint.lightened(0.19), base), 0.5)
 		else:
 			for offset in [Vector2(-2, -0.5), Vector2(0, -2), Vector2(1.5, -0.5), Vector2(0.5, 1.1), Vector2(-1.2, 1)]:
 				var pixel := snap_pixel(tip + offset)
-				draw_rect(Rect2(pixel, Vector2(1.5, 1.5)), item.tint.darkened(0.17) if offset.y > 0.0 else item.tint)
-			draw_rect(Rect2(tip - Vector2(0.25, 0.25), Vector2.ONE), Color("#bd8952"))
-			draw_rect(Rect2(tip - Vector2(0.5, 0.5), Vector2(0.5, 0.5)), Color("#f0d29c"))
+				draw_rect(Rect2(pixel, Vector2(1.5, 1.5)), shade_color(item.tint.darkened(0.17) if offset.y > 0.0 else item.tint, base))
+			draw_rect(Rect2(tip - Vector2(0.25, 0.25), Vector2.ONE), shade_color(Color("#bd8952"), base))
+			draw_rect(Rect2(tip - Vector2(0.5, 0.5), Vector2(0.5, 0.5)), shade_color(Color("#f0d29c"), base))
 	if item == hovered_floater and held_floater == null:
-		draw_brackets(snap_pixel(base.lerp(tip, 0.72)), 4.0)
+		draw_hover_halo(self, snap_pixel(base.lerp(tip, 0.62)), 5.0, 6.0)
 
 func draw_planted_branch(item: Floater, bed: Vector2, axis: Vector2) -> void:
 	var wet := is_wet(item.point)
@@ -1165,13 +1387,13 @@ func draw_planted_branch(item: Floater, bed: Vector2, axis: Vector2) -> void:
 	draw_colored_polygon(PackedVector2Array([
 		snap_pixel(waterline - across * 1.35), snap_pixel(bend - across * 1.02), snap_pixel(tip - across * 0.45),
 		snap_pixel(tip + across * 0.36), snap_pixel(bend + across * 0.72), snap_pixel(waterline + across * 1.17),
-	]), ink)
+	]), shade_color(ink, bed))
 	draw_polyline(PackedVector2Array([
 		snap_pixel(waterline - across * 0.52), snap_pixel(bend - across * 0.46), tip
-	]), item.tint.lightened(0.15), 0.75)
-	draw_line(snap_pixel(collar + across * 0.34), snap_pixel(bend + across * 0.30), item.tint.darkened(0.28), 0.5)
-	draw_line(bend, fork, ink, 1.25)
-	draw_line(snap_pixel(bend + direction * 0.65), fork, item.tint, 0.5)
+	]), shade_color(item.tint.lightened(0.15), bed), 0.75)
+	draw_line(snap_pixel(collar + across * 0.34), snap_pixel(bend + across * 0.30), shade_color(item.tint.darkened(0.28), bed), 0.5)
+	draw_line(bend, fork, shade_color(ink, bed), 1.25)
+	draw_line(snap_pixel(bend + direction * 0.65), fork, shade_color(item.tint, bed), 0.5)
 	if wet:
 		draw_line(snap_pixel(waterline - across * 1.3), snap_pixel(waterline + across * 1.3), Color(Color("#b2d4bd"), 0.76), 0.75)
 
@@ -1206,114 +1428,102 @@ func dampness(piece: Pool.Piece) -> float:
 	return wet * (1.0 - smoothstep(0.0, 12.0, piece.visible_lift))
 
 func draw_piece(piece: Pool.Piece, p: Vector2, roll: float, damp := 0.0, submersion := 0.0, seated := false, squash := 1.0) -> void:
-	if piece.kind == Pool.STONE:
-		draw_rock(piece, p, roll, damp, submersion, seated, squash)
-		return
-	var r := piece.radius * (1.0 - piece.wear * 0.35)
-	var seed := fposmod(piece.radius * 0.317 + piece.shade * 0.247, 1.0)
-	squash *= lerpf(0.58, 0.83, seed)
-	var turn := roll + lerpf(-0.28, 0.31, seed)
-	p = snap_pixel(p + Vector2(0, seed * 1.4 if seated else 0.0))
-	var shape := PackedVector2Array()
-	var sides := 8 + piece.shade % 3
-	for i in sides:
-		var phase := i + fposmod(i * 3.53 + piece.radius * 0.13, 1.0) * 0.37
-		var angle := TAU * phase / sides + piece.shade * 0.2
-		var size := r * (0.80 + fposmod(i * 1.29 + piece.shade * 0.27, 1.0) * 0.27)
-		shape.append(snap_pixel(p + (Vector2(cos(angle), sin(angle) * squash) * size).rotated(turn)))
-	if seated:
-		var bed := p + Vector2(r * 0.11, r * 0.46)
-		var contact := PackedVector2Array([Vector2(-0.90, -0.16), Vector2(0.54, -0.45), Vector2(1.05, 0.05), Vector2(0.57, 0.24), Vector2(-0.35, 0.26)])
-		for i in contact.size():
-			contact[i] = snap_pixel(bed + contact[i] * r)
-		draw_colored_polygon(contact, Color("#65523b94").lerp(Color("#233b397b"), damp))
-		if seed > 0.42 and r >= 6.0:
-			for i in 3:
-				var pebble := snap_pixel(bed + Vector2((0.50 + i * 0.22) * r, (i % 2) * 1.5))
-				draw_rect(Rect2(pebble, Vector2(1.0 + (i % 2) * 0.5, 1.0)), Color("#7f745b").lerp(Color("#435752"), damp))
-				draw_rect(Rect2(pebble + Vector2(0, 0.5), Vector2(1, 0.5)), Color("#4c4a3c"))
-	draw_colored_polygon(shape, Color("#554037"))
+	draw_rock(piece, p, roll, damp, submersion, seated, squash)
 
-	var face := PackedVector2Array()
-	for tip in shape:
-		face.append(snap_pixel(p + (tip - p) * 0.90 - Vector2(0, 0.6)))
-	var base := Color("#97694a")
-	draw_colored_polygon(face, base)
-	var ridge := snap_pixel(p + Vector2(-r * 0.26, -r * lerpf(0.13, 0.31, seed)).rotated(turn))
-	for i in face.size():
-		var next := (i + 1) % face.size()
-		var midpoint := (face[i] + face[next]) * 0.5
-		var light := (midpoint - p).normalized().dot(Vector2(-0.48, -0.88))
-		var facet := base.lerp(Color("#c4aa88"), light * 0.47) if light > 0.0 else base.darkened(-light * 0.33)
-		var lower_face := smoothstep(-0.15, 0.55, (midpoint.y - p.y) / maxf(1.0, r * 0.65))
-		facet = facet.lerp(Color("#354b4c").lerp(facet, 0.36), damp * lower_face * 0.7)
-		draw_colored_polygon(PackedVector2Array([ridge, face[i], face[next]]), facet)
-		if light > 0.52 and i % 2 == 0:
-			draw_line(snap_pixel(face[i].lerp(midpoint, 0.36)), snap_pixel(midpoint.lerp(face[next], 0.40)), Color("#dfb6899a"), 0.5)
-	for i in 16:
-		var x := fposmod(i * 0.618 + piece.shade * 0.093, 1.0) - 0.5
-		var y := fposmod(i * 0.267 + piece.radius * 0.053, 1.0) - 0.5
-		var position := snap_pixel(p + (Vector2(x * 1.2, y * 0.68) * r).rotated(turn))
-		var tone := Color(base.lightened(0.17) if i % 3 == 0 else base.darkened(0.27), 0.70)
-		if y > 0.13:
-			tone = tone.lerp(Color("#384c47ad"), damp * 0.55)
-		draw_rect(Rect2(position, Vector2(0.5 if i % 2 == 0 else 1.0, 0.5)), tone)
-	if submersion > 0.13:
-		draw_stone_waterline(shape, p.y + r * (0.51 - submersion * 0.69))
+func make_hearth_warm_face(stone: Pool.Piece) -> ImageTexture:
+	var face := rock_art.for_piece(stone.radius, stone.shade).texture.get_image()
+	var center := Vector2(face.get_size()) * Vector2(0.5, 0.48)
+	var toward_fire := -stone.point.normalized()
+	for y in face.get_height():
+		for x in face.get_width():
+			var ink := face.get_pixel(x, y)
+			if ink.a <= 0.0:
+				continue
+			var from_center := (Vector2(x, y) + Vector2(0.5, 0.5) - center) * Vector2(1.0, 0.83)
+			var facing := from_center.dot(toward_fire) / maxf(1.0, stone.radius * 2.0)
+			var weight := smoothstep(-0.01, 0.75, facing)
+			var warm := ink * Color(1.37, 1.08, 0.86)
+			face.set_pixel(x, y, Color(warm, ink.a * weight))
+	return ImageTexture.create_from_image(face)
 
 func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersion: float, seated: bool, squash: float,
 		firelight := 0.0) -> void:
+	var is_earth := piece.kind == Pool.EARTH
 	var r := piece.radius
+	var wear_scale := (1.0 - piece.wear * 0.30) if is_earth else 1.0
+	var seed := fposmod(piece.radius * 0.317 + piece.shade * 0.247, 1.0)
 	p = snap_pixel(p)
+	var effective_damp := maxf(damp, rain.wetness * 0.32)
 	if seated:
-		var foot := p + Vector2(-r * 0.15, r * 0.66 * squash)
+		var foot := p + Vector2(-r * 0.12, r * (0.56 if is_earth else 0.66) * squash * wear_scale)
 		var shadow := PackedVector2Array([Vector2(-1.02, 0.02), Vector2(-0.68, -0.33),
 			Vector2(0.54, -0.34), Vector2(0.91, -0.11), Vector2(0.53, 0.21), Vector2(-0.57, 0.27)])
 		for i in shadow.size():
-			shadow[i] = snap_pixel(foot + shadow[i] * r)
-		draw_colored_polygon(shadow, Color("#26251f99").lerp(Color("#112a2a80"), damp))
+			shadow[i] = snap_pixel(foot + shadow[i] * r * wear_scale)
+		var shadow_dry := Color("#4d3d2c96") if is_earth else Color("#24231da8")
+		var shadow_wet := Color("#1b32307e") if is_earth else Color("#112a2a84")
+		draw_colored_polygon(shadow, shadow_dry.lerp(shadow_wet, effective_damp))
+		if is_earth and seed > 0.42 and r >= 6.0:
+			for i in 3:
+				var pebble := snap_pixel(foot + Vector2((0.48 + i * 0.20) * r, (i % 2) * 1.5))
+				draw_rect(Rect2(pebble, Vector2(1.0 + (i % 2) * 0.5, 1.0)), shade_color(Color("#7f745b").lerp(Color("#435752"), effective_damp), pebble))
+				draw_rect(Rect2(pebble + Vector2(0, 0.5), Vector2(1, 0.5)), shade_color(Color("#4c4a3c"), pebble))
 
-	var carving := rock_art.for_piece(r, piece.shade)
+	var carving: RockArt.Rock = rock_art.for_earth(r, piece.shade) if is_earth else rock_art.for_piece(r, piece.shade)
 	var size := carving.texture.get_size()
 	var origin := -size * 0.25
 	var sunlight := smoothstep(0.18, 0.77, p.x / SIZE.x + (1.0 - p.y / SIZE.y) * 0.34)
-	var dry := Color("#c3cdd2").lerp(Color("#fff6e5"), sunlight)
-	dry *= Color(1.0 + firelight * 0.14, 1.0 + firelight * 0.038, 1.0 - firelight * 0.11)
-	var wet := dry * Color("#779997")
+	var env := env_modulate(p)
+	var dry := (Color("#d4c8be").lerp(Color("#fff3e2"), sunlight) if is_earth else Color("#c3cdd2").lerp(Color("#fff6e5"), sunlight)) * env
+	var wet := dry * (Color("#637d79") if is_earth else Color("#779997"))
 	var water_row := clampi(roundi((r * (0.71 - submersion * 0.92) - origin.y) * 2.0), 0, int(size.y))
-	draw_set_transform(p, roll, Vector2(1.0, squash))
+	draw_set_transform(p, roll, Vector2(wear_scale, squash * wear_scale))
 	draw_texture_rect(carving.texture, Rect2(origin, size * 0.5), false, dry)
-	if damp > 0.0 and water_row < int(size.y):
+	if effective_damp > 0.0 and water_row < int(size.y):
 		var lower_strip := Rect2(0, water_row, size.x, size.y - water_row)
 		draw_texture_rect_region(carving.texture, Rect2(origin + lower_strip.position * 0.5, lower_strip.size * 0.5),
-			lower_strip, Color(wet, damp * 0.80))
-		if submersion > 0.13:
-			var rim := carving.rim[water_row]
-			var width := (rim.y - rim.x) * 0.5
-			if width >= 2.0:
-				var start := origin + Vector2(rim.x, water_row) * 0.5
-				draw_rect(Rect2(start + Vector2(0.5, 0), Vector2(width * 0.23, 0.5)), Color("#b6c2a990"))
-				draw_rect(Rect2(start + Vector2(floorf(width * 1.28) * 0.5, 0), Vector2(width * 0.18, 0.5)), Color("#a3c2ae79"))
+			lower_strip, Color(wet, effective_damp * 0.80))
+	if firelight > 0.01 and hearth_warm_faces.has(piece):
+		draw_texture_rect(hearth_warm_faces[piece], Rect2(origin, size * 0.5), false,
+			Color(dry, firelight * (1.0 - effective_damp * 0.44)))
 	draw_set_transform(Vector2.ZERO)
+	if submersion > 0.13 and water_row < carving.rim.size():
+		var rim := carving.rim[water_row]
+		var width := (rim.y - rim.x) * 0.5 * wear_scale
+		if width >= 2.0:
+			var left_x := p.x + (origin.x + rim.x * 0.5) * wear_scale
+			var right_x := left_x + width
+			var water_y := p.y + (origin.y + water_row * 0.5) * squash * wear_scale
+			draw_piece_water_contact(piece, water_y, left_x, right_x, submersion)
 
-func draw_stone_waterline(shape: PackedVector2Array, level: float) -> void:
-	var left := INF
-	var right := -INF
-	for i in shape.size():
-		var a := shape[i]
-		var b := shape[(i + 1) % shape.size()]
-		if (a.y <= level) == (b.y <= level):
-			continue
-		var crossing := lerpf(a.x, b.x, (level - a.y) / (b.y - a.y))
-		left = minf(left, crossing)
-		right = maxf(right, crossing)
-	var width := right - left
-	if width < 1.5:
+func draw_piece_water_contact(piece: Pool.Piece, water_y: float, left_x: float, right_x: float, submersion: float) -> void:
+	var width := right_x - left_x
+	if width < 2.0:
 		return
-	var at := snap_pixel(Vector2(left, level))
-	draw_rect(Rect2(at, Vector2(width, 1.0)), Color("#304b49b8"))
-	draw_rect(Rect2(at, Vector2(width * 0.30, 0.5)), Color("#b0be9b9b"))
-	draw_rect(Rect2(snap_pixel(at + Vector2(width * 0.68, 0.5)), Vector2(width * 0.24, 0.5)), Color("#90b0a381"))
+	var v := water.velocity_at(piece.point - Vector2(piece.radius * 0.70, 0.0))
+	var push := surge_at(piece.point.x)
+	var flow_force := clampf(v.x / 35.0 + push * 0.65, 0.0, 1.35)
+	var surge_wave := (0.5 + flow_force * 0.8 + sin(clock * 4.2 + piece.point.y) * 0.35) if flow_force > 0.08 else 0.0
+	var mid_x := lerpf(left_x, right_x, 0.50)
+	# Leeward wake shadow on the downstream side.
+	draw_rect(Rect2(snap_pixel(Vector2(mid_x, water_y)), Vector2(width * 0.48, 1.5)),
+		Color("#143435", 0.28 * submersion))
+	# Curved windward waterline hugging the submerged stone/earth belly.
+	var curve := PackedVector2Array([
+		snap_pixel(Vector2(left_x - 0.5, water_y - surge_wave * 0.75)),
+		snap_pixel(Vector2(lerpf(left_x, right_x, 0.22), water_y - surge_wave * 0.35)),
+		snap_pixel(Vector2(mid_x, water_y + 0.45)),
+		snap_pixel(Vector2(lerpf(left_x, right_x, 0.78), water_y + 0.25)),
+		snap_pixel(Vector2(right_x, water_y)),
+	])
+	draw_polyline(curve, Color("#304b49b8"), 1.0)
+	var foam_curve := PackedVector2Array([curve[0], curve[1], curve[2]])
+	draw_polyline(foam_curve, Color("#c8eee4", clampf(0.45 + flow_force * 0.35, 0.0, 0.88)), 0.5)
+	if flow_force > 0.14:
+		for i in 2:
+			var phase := fposmod(clock * (1.8 + flow_force * 1.6) + i * 0.5 + piece.shade * 0.17, 1.0)
+			var fleck := snap_pixel(Vector2(left_x - 1.0 + phase * width * 0.35, water_y - surge_wave * (1.0 - phase) + (i - 0.5) * 0.75))
+			draw_rect(Rect2(fleck, Vector2(1.0, 0.5)), Color(FOAM, (1.0 - phase) * clampf(0.40 + flow_force * 0.40, 0.0, 0.85)))
 
 func draw_froth() -> void:
 	for item in droplets:

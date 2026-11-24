@@ -213,7 +213,10 @@ func draw_fish(canvas: Node2D, project: Callable, pointer: Vector2, foreground :
 	]), shadow)
 	canvas.draw_line(position + Vector2(-2, -0.5).rotated(turn), position + Vector2(1, -0.45).rotated(turn), Color(0.50, 0.68, 0.60, presence * 0.25), 0.5)
 
-func draw_land(canvas: Node2D) -> void:
+func apply_tint(color: Color, at: Vector2, tint_at: Callable) -> Color:
+	return tint_at.call(color, at) if tint_at.is_valid() else color
+
+func draw_land(canvas: Node2D, tint_at: Callable = Callable()) -> void:
 	for i in SEDGES.size():
 		var data: Vector3 = SEDGES[i]
 		var root := Vector2(data.x, data.y)
@@ -224,29 +227,29 @@ func draw_land(canvas: Node2D) -> void:
 			var split := root + Vector2(span * 0.37 + sway * 0.19, -height * 0.54)
 			var tip := plant_tip(i, stem)
 			var ink := Color("#596332") if stem % 2 == 0 else Color("#7a7b42")
-			canvas.draw_line(root, split, Color("#454c2d"), 0.5)
-			canvas.draw_line(split, tip, ink, 0.5)
+			canvas.draw_line(root, split, apply_tint(Color("#454c2d"), root, tint_at), 0.5)
+			canvas.draw_line(split, tip, apply_tint(ink, root, tint_at), 0.5)
 			var blade := split.lerp(tip, 0.53)
-			canvas.draw_line(blade, blade + Vector2(1.0 + sway * 0.6, -1.1), ink.lightened(0.11), 0.5)
+			canvas.draw_line(blade, blade + Vector2(1.0 + sway * 0.6, -1.1), apply_tint(ink.lightened(0.11), root, tint_at), 0.5)
 
-	draw_cicada_leaf(canvas)
+	draw_cicada_leaf(canvas, tint_at)
 	for leaf in [Vector3(58, 155, -0.7), Vector3(60.5, 154, 0.6), Vector3(59, 157, 2.9),
 			Vector3(187, 151, 0.4), Vector3(196, 46, -1.7), Vector3(109, 169, 2.8)]:
-		draw_litter_leaf(canvas, Vector2(leaf.x, leaf.y), leaf.z, Color("#96744a"))
+		draw_litter_leaf(canvas, Vector2(leaf.x, leaf.y), leaf.z, apply_tint(Color("#96744a"), Vector2(leaf.x, leaf.y), tint_at))
 
 	# Litter caught at breaks in the rock bank.
-	draw_litter_leaf(canvas, Vector2(89.5, 94.5), 0.5, Color("#766145"))
+	draw_litter_leaf(canvas, Vector2(89.5, 94.5), 0.5, apply_tint(Color("#766145"), Vector2(89.5, 94.5), tint_at))
 	var twig := Vector2(227.5, 126.0)
-	canvas.draw_polyline(PackedVector2Array([twig + Vector2(-3, -2.5), twig, twig + Vector2(3, 0.5)]), Color("#675746"), 0.5)
-	canvas.draw_line(twig + Vector2(-3, -2.5), twig, Color("#3d4f46"), 0.5)
-	canvas.draw_line(twig, twig + Vector2(2, -1.5), Color("#89704f"), 0.5)
+	canvas.draw_polyline(PackedVector2Array([twig + Vector2(-3, -2.5), twig, twig + Vector2(3, 0.5)]), apply_tint(Color("#675746"), twig, tint_at), 0.5)
+	canvas.draw_line(twig + Vector2(-3, -2.5), twig, apply_tint(Color("#3d4f46"), twig, tint_at), 0.5)
+	canvas.draw_line(twig, twig + Vector2(2, -1.5), apply_tint(Color("#89704f"), twig, tint_at), 0.5)
 
 	# A small sun-bleached bamboo stake by the path.
 	var stake := Vector2(191.0, 41.0)
 	canvas.draw_line(stake, stake + Vector2(4, 1), Color("#36392e62"), 1.0)
-	canvas.draw_line(stake, stake + Vector2(-0.8, -9.0), Color("#5e5a36"), 1.5)
-	canvas.draw_line(stake + Vector2(-0.4, -1), stake + Vector2(-1.0, -8.6), Color("#a7965b"), 0.5)
-	canvas.draw_line(stake + Vector2(-1.6, -5.3), stake + Vector2(0.4, -5.6), Color("#c3a77a"), 0.5)
+	canvas.draw_line(stake, stake + Vector2(-0.8, -9.0), apply_tint(Color("#5e5a36"), stake, tint_at), 1.5)
+	canvas.draw_line(stake + Vector2(-0.4, -1), stake + Vector2(-1.0, -8.6), apply_tint(Color("#a7965b"), stake, tint_at), 0.5)
+	canvas.draw_line(stake + Vector2(-1.6, -5.3), stake + Vector2(0.4, -5.6), apply_tint(Color("#c3a77a"), stake, tint_at), 0.5)
 
 func draw_litter_leaf(canvas: Node2D, at: Vector2, turn: float, ink: Color) -> void:
 	var shape := PackedVector2Array([Vector2(-1.5, 0), Vector2(-0.5, -0.8), Vector2(1.6, -0.5), Vector2(0.6, 0.5), Vector2(-0.6, 0.5)])
@@ -255,48 +258,48 @@ func draw_litter_leaf(canvas: Node2D, at: Vector2, turn: float, ink: Color) -> v
 	canvas.draw_colored_polygon(shape, ink)
 	canvas.draw_line(at, at + Vector2(1.7, -0.4).rotated(turn), ink.darkened(0.26), 0.5)
 
-func draw_cicada_leaf(canvas: Node2D) -> void:
+func draw_cicada_leaf(canvas: Node2D, tint_at: Callable = Callable()) -> void:
 	var p := CICADA_PERCH
-	canvas.draw_line(p + Vector2(6, 1), p + Vector2(8.0, 4.0), Color("#59653a"), 0.75)
+	canvas.draw_line(p + Vector2(6, 1), p + Vector2(8.0, 4.0), apply_tint(Color("#59653a"), p, tint_at), 0.75)
 	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-8.5, -2.5), p + Vector2(-4.5, -4.0),
 		p + Vector2(0.5, -4.5), p + Vector2(5.0, -3.0), p + Vector2(7, 1.0),
-		p + Vector2(4.5, 3.0), p + Vector2(-1.0, 2.5), p + Vector2(-6.5, 0.0)]), Color("#374932"))
+		p + Vector2(4.5, 3.0), p + Vector2(-1.0, 2.5), p + Vector2(-6.5, 0.0)]), apply_tint(Color("#374932"), p, tint_at))
 	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-8.0, -2.5), p + Vector2(-3.5, -3.5),
 		p + Vector2(0.5, -4.0), p + Vector2(4.5, -2.5), p + Vector2(6.0, 0.5),
-		p + Vector2(3.5, 2.0), p + Vector2(-1.0, 2.0), p + Vector2(-5.5, -0.5)]), Color("#61754a"))
-	canvas.draw_line(p + Vector2(-6.0, -2.0), p + Vector2(5.5, 0.5), Color("#7d895a"), 0.5)
+		p + Vector2(3.5, 2.0), p + Vector2(-1.0, 2.0), p + Vector2(-5.5, -0.5)]), apply_tint(Color("#61754a"), p, tint_at))
+	canvas.draw_line(p + Vector2(-6.0, -2.0), p + Vector2(5.5, 0.5), apply_tint(Color("#7d895a"), p, tint_at), 0.5)
 	for x: float in [-3.5, 0.0, 3.0]:
 		var rib := p + Vector2(x, x * 0.20 - 0.65)
-		canvas.draw_line(rib, rib + Vector2(-1.5, -1.7), Color("#788857"), 0.5)
-		canvas.draw_line(rib, rib + Vector2(0.4, 1.45), Color("#4e6742"), 0.5)
+		canvas.draw_line(rib, rib + Vector2(-1.5, -1.7), apply_tint(Color("#788857"), p, tint_at), 0.5)
+		canvas.draw_line(rib, rib + Vector2(0.4, 1.45), apply_tint(Color("#4e6742"), p, tint_at), 0.5)
 
-func draw_cicada(canvas: Node2D, pointer: Vector2) -> void:
+func draw_cicada(canvas: Node2D, pointer: Vector2, tint_at: Callable = Callable()) -> void:
 	var at := pointer - Vector2(0, 5) if cicada_held else cicada_position
 	var p := (at * 2.0).round() * 0.5
 	if not cicada_held:
 		canvas.draw_line(p + Vector2(-2.0, 0.5), p + Vector2(3.5, 1.5), Color("#253e327d"), 2.0)
 	for i in 3:
 		var joint := p + Vector2(-2.0 + i * 1.5, i * 0.28)
-		canvas.draw_line(joint, joint + Vector2(-0.75, 1.5), Color("#3f5636"), 0.55)
-		canvas.draw_line(joint, joint + Vector2(-0.6, -1.3), Color("#49653d"), 0.55)
+		canvas.draw_line(joint, joint + Vector2(-0.75, 1.5), apply_tint(Color("#3f5636"), p, tint_at), 0.55)
+		canvas.draw_line(joint, joint + Vector2(-0.6, -1.3), apply_tint(Color("#49653d"), p, tint_at), 0.55)
 	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-3.5, -1.5), p + Vector2(-2.0, -2.1),
-		p + Vector2(1.0, -1.5), p + Vector2(4.0, 0.9), p + Vector2(2.9, 1.7), p + Vector2(-2.9, 0.5)]), Color("#2b4432"))
+		p + Vector2(1.0, -1.5), p + Vector2(4.0, 0.9), p + Vector2(2.9, 1.7), p + Vector2(-2.9, 0.5)]), apply_tint(Color("#2b4432"), p, tint_at))
 	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-2.0, -1.7), p + Vector2(0.0, -1.3),
-		p + Vector2(3.4, 1.0), p + Vector2(1.7, 0.93), p + Vector2(-1.3, 0.1)]), Color("#96af68"))
-	canvas.draw_line(p + Vector2(-1.5, -1.15), p + Vector2(2.9, 0.9), Color("#c1c88b"), 0.5)
-	canvas.draw_line(p + Vector2(-2.0, -0.2), p + Vector2(2.1, 1.1), Color("#708e54"), 0.5)
-	canvas.draw_rect(Rect2(p + Vector2(-3.5, -1.75), Vector2(2.0, 2.0)), Color("#8da85b"))
-	canvas.draw_rect(Rect2(p + Vector2(-3.75, -1.75), Vector2(0.75, 0.75)), Color("#26362c"))
-	canvas.draw_rect(Rect2(p + Vector2(-3.25, 0), Vector2(0.75, 0.5)), Color("#304532"))
+		p + Vector2(3.4, 1.0), p + Vector2(1.7, 0.93), p + Vector2(-1.3, 0.1)]), apply_tint(Color("#96af68"), p, tint_at))
+	canvas.draw_line(p + Vector2(-1.5, -1.15), p + Vector2(2.9, 0.9), apply_tint(Color("#c1c88b"), p, tint_at), 0.5)
+	canvas.draw_line(p + Vector2(-2.0, -0.2), p + Vector2(2.1, 1.1), apply_tint(Color("#708e54"), p, tint_at), 0.5)
+	canvas.draw_rect(Rect2(p + Vector2(-3.5, -1.75), Vector2(2.0, 2.0)), apply_tint(Color("#8da85b"), p, tint_at))
+	canvas.draw_rect(Rect2(p + Vector2(-3.75, -1.75), Vector2(0.75, 0.75)), apply_tint(Color("#26362c"), p, tint_at))
+	canvas.draw_rect(Rect2(p + Vector2(-3.25, 0), Vector2(0.75, 0.5)), apply_tint(Color("#304532"), p, tint_at))
 
-func draw_insect(canvas: Node2D, pointer: Vector2) -> void:
+func draw_insect(canvas: Node2D, pointer: Vector2, tint_at: Callable = Callable()) -> void:
 	var point := pointer - Vector2(0, 5) if insect_held else insect_position
 	var settled := insect_held or insect_state == Flight.PERCHED
 	var flex := sin(insect_age * 61.0) if not settled else sin(clock * 5.0) * smoothstep(0.87, 0.99, sin(clock * 0.7)) * 0.65
-	var glint := Color(0.78, 0.91, 0.72, 0.63 + absf(flex) * 0.26)
-	canvas.draw_line(point - Vector2(3.2, 0), point + Vector2(2.2, -0.6), Color("#345947"), 0.8)
+	var glint := apply_tint(Color(0.78, 0.91, 0.72, 0.63 + absf(flex) * 0.26), point, tint_at)
+	canvas.draw_line(point - Vector2(3.2, 0), point + Vector2(2.2, -0.6), apply_tint(Color("#345947"), point, tint_at), 0.8)
 	for side in [-1.0, 1.0]:
 		var tip := point + Vector2(-0.75, (2.15 + flex) * side)
 		canvas.draw_line(point, tip, glint, 0.5)
 		canvas.draw_line(point - Vector2(0.8, 0), tip - Vector2(1.1, 0), Color(glint, 0.56), 0.5)
-	canvas.draw_rect(Rect2(point + Vector2(1.0, -0.5), Vector2(0.9, 0.5)), Color("#75b087"))
+	canvas.draw_rect(Rect2(point + Vector2(1.0, -0.5), Vector2(0.9, 0.5)), apply_tint(Color("#75b087"), point, tint_at))

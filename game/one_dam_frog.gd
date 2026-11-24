@@ -90,7 +90,10 @@ func hop_height() -> float:
 func screen_point() -> Vector2:
 	return position - Vector2(0, hop_height() * 9.0)
 
-func draw(canvas: Node2D, pointer: Vector2) -> void:
+func apply_tint(color: Color, at: Vector2, tint_at: Callable) -> Color:
+	return tint_at.call(color, at) if tint_at.is_valid() else color
+
+func draw(canvas: Node2D, pointer: Vector2, tint_at: Callable = Callable()) -> void:
 	var airborne := hop_height()
 	var p := pointer - Vector2(0, 5) if held else screen_point()
 	p = (p * 2.0).round() * 0.5
@@ -98,13 +101,13 @@ func draw(canvas: Node2D, pointer: Vector2) -> void:
 		canvas.draw_rect(Rect2((position * 2.0).round() * 0.5 - Vector2(3, 0), Vector2(6, 1.5)), Color("#293c345b"))
 	for side in [-1.0, 1.0]:
 		var foot := p + Vector2((-3.7 - airborne * 3.0) * facing, side * 2.2)
-		canvas.draw_line(p + Vector2(-1.0 * facing, side), foot, Color("#566c46"), 1.5)
-		canvas.draw_line(foot, foot + Vector2(-1.0 * facing, side * 0.75), Color("#849260"), 1.0)
+		canvas.draw_line(p + Vector2(-1.0 * facing, side), foot, apply_tint(Color("#566c46"), p, tint_at), 1.5)
+		canvas.draw_line(foot, foot + Vector2(-1.0 * facing, side * 0.75), apply_tint(Color("#849260"), p, tint_at), 1.0)
 	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-3.3, 0), p + Vector2(-2.4, -2.2),
-		p + Vector2(1.9, -2.6), p + Vector2(3.3, -1.0), p + Vector2(2.6, 1.7), p + Vector2(-2.4, 2.2)]), Color("#587849"))
-	canvas.draw_line(p + Vector2(-2.2, -0.75), p + Vector2(2.1, -1.4), Color("#90a765"), 1.5)
+		p + Vector2(1.9, -2.6), p + Vector2(3.3, -1.0), p + Vector2(2.6, 1.7), p + Vector2(-2.4, 2.2)]), apply_tint(Color("#587849"), p, tint_at))
+	canvas.draw_line(p + Vector2(-2.2, -0.75), p + Vector2(2.1, -1.4), apply_tint(Color("#90a765"), p, tint_at), 1.5)
 	var nose := p + Vector2(2.7 * facing, -0.6)
 	var throat_size := snappedf(throat * 1.5, 0.5)
-	canvas.draw_rect(Rect2(nose - Vector2(1.25, 0), Vector2(2.5, 1.5 + throat_size)), Color("#acc18a"))
-	canvas.draw_rect(Rect2(nose - Vector2(1.0, 2.25), Vector2(2.0, 1.5)), Color("#afb36e"))
-	canvas.draw_rect(Rect2(nose + Vector2(facing * 0.25, -2.0), Vector2(0.75, 0.75)), Color("#2f3a2d"))
+	canvas.draw_rect(Rect2(nose - Vector2(1.25, 0), Vector2(2.5, 1.5 + throat_size)), apply_tint(Color("#acc18a"), p, tint_at))
+	canvas.draw_rect(Rect2(nose - Vector2(1.0, 2.25), Vector2(2.0, 1.5)), apply_tint(Color("#afb36e"), p, tint_at))
+	canvas.draw_rect(Rect2(nose + Vector2(facing * 0.25, -2.0), Vector2(0.75, 0.75)), apply_tint(Color("#2f3a2d"), p, tint_at))
