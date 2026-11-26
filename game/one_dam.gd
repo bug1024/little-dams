@@ -48,7 +48,14 @@ var cicada_audio: AudioStreamPlayer
 var cicada_buzz_audio: AudioStreamPlayer
 var bird_chirp_audio: AudioStreamPlayer
 var bird_flutter_audio: AudioStreamPlayer
+var forage_audio: AudioStreamPlayer
+var mud_audio: AudioStreamPlayer
+var bamboo_audio: AudioStreamPlayer
+var pipe_audio: AudioStreamPlayer
+var ignite_audio: AudioStreamPlayer
+var shutter_audio: AudioStreamPlayer
 var hearth_audio: AudioStreamPlayer
+var last_snapshot_path := ""
 var held: Pool.Piece
 var held_floater: View.Floater
 var held_pipe: Pool.DrainPipe
@@ -132,6 +139,30 @@ func _ready() -> void:
 		bird_flutter_audio.volume_db = -24.0
 		add_child(bird_flutter_audio)
 		scene.bird.startled_off.connect(bird_flutter_audio.play)
+		forage_audio = AudioStreamPlayer.new()
+		forage_audio.stream = WaterAudio.forage_rustle()
+		forage_audio.volume_db = -22.0
+		add_child(forage_audio)
+		mud_audio = AudioStreamPlayer.new()
+		mud_audio.stream = WaterAudio.mud_squelch()
+		mud_audio.volume_db = -18.0
+		add_child(mud_audio)
+		bamboo_audio = AudioStreamPlayer.new()
+		bamboo_audio.stream = WaterAudio.bamboo_tap()
+		bamboo_audio.volume_db = -20.0
+		add_child(bamboo_audio)
+		pipe_audio = AudioStreamPlayer.new()
+		pipe_audio.stream = WaterAudio.pipe_trickle()
+		pipe_audio.volume_db = -60.0
+		add_child(pipe_audio)
+		ignite_audio = AudioStreamPlayer.new()
+		ignite_audio.stream = WaterAudio.hearth_ignite()
+		ignite_audio.volume_db = -19.0
+		add_child(ignite_audio)
+		shutter_audio = AudioStreamPlayer.new()
+		shutter_audio.stream = WaterAudio.shutter_click()
+		shutter_audio.volume_db = -21.0
+		add_child(shutter_audio)
 		hearth_audio = AudioStreamPlayer.new()
 		hearth_audio.stream = WaterAudio.hearth_fire()
 		hearth_audio.volume_db = -60.0
@@ -263,6 +294,18 @@ func restart() -> void:
 		bird_chirp_audio.stop()
 	if bird_flutter_audio != null:
 		bird_flutter_audio.stop()
+	if forage_audio != null:
+		forage_audio.stop()
+	if mud_audio != null:
+		mud_audio.stop()
+	if bamboo_audio != null:
+		bamboo_audio.stop()
+	if pipe_audio != null:
+		pipe_audio.stop()
+	if ignite_audio != null:
+		ignite_audio.stop()
+	if shutter_audio != null:
+		shutter_audio.stop()
 	if hearth_audio != null:
 		hearth_audio.stop()
 	upper_breach.reset()
@@ -366,6 +409,21 @@ func _process(delta: float) -> void:
 			hearth_audio.volume_db = -24.0 + linear_to_db(clampf(scene.hearth.firelight, 0.001, 1.0))
 		elif hearth_audio.playing:
 			hearth_audio.stop()
+	if pipe_audio != null:
+		var pipe_flow := 0.0
+		for pipe in model.pipes:
+			pipe_flow += pipe.rate
+		for pipe in lower.pipes:
+			pipe_flow += pipe.rate
+		var pipe_level := clampf(pipe_flow / 0.55, 0.0, 1.0)
+		if pipe_level > 0.04:
+			if not pipe_audio.playing:
+				pipe_audio.volume_db = -60.0
+				pipe_audio.play()
+			pipe_audio.volume_db = -25.0 + linear_to_db(maxf(0.001, pipe_level))
+			pipe_audio.pitch_scale = lerpf(0.92, 1.12, pipe_level)
+		elif pipe_audio.playing:
+			pipe_audio.stop()
 
 func update_hover(pointer: Vector2) -> void:
 	scene.hovered = null
@@ -426,6 +484,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			opening()
 		elif event.physical_keycode == KEY_T:
 			cycle_time()
+		elif event.physical_keycode == KEY_P:
+			take_snapshot()
 		return
 	if event is InputEventMouseMotion:
 		var pointer := stage_pointer(event.position)
@@ -443,6 +503,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		scene.bird.disturb(point, 62.0)
 		held_pipe = scene.pipe_at(point)
 		if held_pipe != null:
+			if held_pipe.host != null:
+				play_foley(mud_audio, 1.04, 1.16)
+			play_foley(bamboo_audio, 0.96, 1.08)
 			scene.held_pipe = held_pipe
 			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 			update_grab(point)
@@ -452,6 +515,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			update_grab(point)
 			return
 		if scene.ignite_hearth(point):
+			play_foley(ignite_audio, 0.96, 1.05)
 			return
 		var forage := scene.floater_at(point)
 		if forage != null and forage.forage != View.Forage.NONE:
@@ -481,6 +545,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				held_pipe.host = host
 				var basin := model if model.wall.has(host) else lower
 				basin.pipes.append(held_pipe)
+				play_foley(mud_audio, 0.94, 1.05)
+				play_foley(bamboo_audio, 0.88, 0.98)
+			else:
+				play_foley(bamboo_audio, 1.02, 1.12)
 		cancel_grab()
 		return
 	if scene.holding_animal():
@@ -488,7 +556,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		cancel_grab()
 		return
 	if held_floater != null:
-		scene.place_floater(held_floater, point)
+		var item := held_floater
+		var count_before := scene.floaters.size()
+		scene.place_floater(item, point)
+		if scene.floaters.size() < count_before:
+			play_foley(forage_audio, 0.86, 0.98)
+		elif item.host != null or item.planted:
+			play_foley(forage_audio, 1.02, 1.16)
 		cancel_grab()
 		return
 	if held == null:
@@ -509,8 +583,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			target_pool.place(held, target, support)
 			if support == null:
 				scene.material_touch(target, held.kind == Pool.EARTH)
-			if can_play_audio():
-				clack.pitch_scale = 1.1 if held.kind == Pool.EARTH else 0.92
+			if held.kind == Pool.EARTH:
+				play_foley(mud_audio, 0.90, 1.04)
+			elif can_play_audio():
+				clack.pitch_scale = 0.92
 				clack.play()
 		elif can_return_to_bank(point):
 			pool_for(held.point.x).detach(held)
@@ -520,6 +596,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			held.notch = 0.0
 			if not scene.bank.has(held):
 				scene.bank.append(held)
+			if held.kind == Pool.EARTH:
+				play_foley(mud_audio, 0.95, 1.08)
+			elif can_play_audio():
+				clack.pitch_scale = 0.96
+				clack.play()
 	cancel_grab()
 
 func pool_for(x: float) -> Pool:
@@ -564,8 +645,34 @@ func stage_pointer(point: Vector2) -> Vector2:
 func begin_floater_grab(item: View.Floater, point: Vector2) -> void:
 	held_floater = item
 	scene.held_floater = item
+	play_foley(forage_audio, 0.92, 1.10)
 	Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 	update_grab(point)
+
+func play_foley(player: AudioStreamPlayer, min_pitch := 0.95, max_pitch := 1.05) -> void:
+	if player == null or not can_play_audio():
+		return
+	player.pitch_scale = randf_range(min_pitch, max_pitch)
+	player.play()
+
+func take_snapshot(custom_path := "") -> String:
+	var target_path := custom_path
+	if target_path.is_empty():
+		var dir_abs := ProjectSettings.globalize_path("user://snapshots")
+		DirAccess.make_dir_recursive_absolute(dir_abs)
+		var stamp := Time.get_datetime_string_from_system(false, true).replace(":", "").replace("-", "").replace(" ", "_")
+		target_path = dir_abs.path_join("little_dams_%s.png" % stamp)
+	var img: Image
+	if DisplayServer.get_name() != "headless":
+		img = canvas.get_texture().get_image()
+	if img == null or img.is_empty():
+		img = Image.create_empty(PIXELS.x, PIXELS.y, false, Image.FORMAT_RGBA8)
+	img.resize(PIXELS.x * 2, PIXELS.y * 2, Image.INTERPOLATE_NEAREST)
+	if img.save_png(target_path) == OK:
+		last_snapshot_path = target_path
+	scene.trigger_snapshot_flash()
+	play_foley(shutter_audio, 0.98, 1.03)
+	return last_snapshot_path
 
 func update_grab(point: Vector2) -> void:
 	scene.pointer = point

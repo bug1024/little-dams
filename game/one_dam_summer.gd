@@ -88,6 +88,11 @@ func reset_ecosystem() -> void:
 	flower_target = Vector2.ZERO
 	pool_richness = 0.0
 	current_day_phase = 0.0
+	insect_state = Flight.PERCHED
+	insect_age = 0.0
+	insect_duration = 5.4
+	perch = 0
+	insect_position = plant_tip(PERCHES[0], 2)
 	reset_cicada()
 
 func reset_cicada() -> void:

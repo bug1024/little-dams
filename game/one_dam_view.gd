@@ -104,6 +104,7 @@ var day_phase := 0.0
 var day_target := -1.0
 var auto_day_cycle := true
 var post_rain_nudged := false
+var snapshot_flash := 0.0
 var streaks := PackedVector2Array()
 var water_pixels := Image.create_empty(Flow.COLUMNS, Flow.ROWS, false, Image.FORMAT_RGBA8)
 var flow_texture := ImageTexture.create_from_image(water_pixels)
@@ -243,6 +244,7 @@ func clear() -> void:
 	day_phase = 0.0
 	day_target = -1.0
 	post_rain_nudged = false
+	snapshot_flash = 0.0
 	bank.clear()
 	pipes.clear()
 	rolling.clear()
@@ -530,6 +532,24 @@ func current_day_stage() -> int:
 		return 0
 	return 1 if day_phase < 1.45 else 2
 
+func trigger_snapshot_flash() -> void:
+	snapshot_flash = 1.0
+
+func has_discovery_hint() -> bool:
+	if held_pipe != null:
+		for basin: Pool in [model, lower]:
+			for piece in basin.wall:
+				if piece.kind == Pool.EARTH and not basin.pipes.any(func(p: Pool.DrainPipe) -> bool: return p != held_pipe and p.host == piece):
+					return true
+		return false
+	if held_floater != null:
+		if can_fuel_hearth(held_floater):
+			return true
+		if held_floater.forage in [Forage.FLOWER, Forage.FOXTAIL]:
+			return not model.wall.is_empty() or not lower.wall.is_empty()
+		return false
+	return not holding_animal() and held == null and hearth.can_ignite()
+
 func blocked_at(basin: Pool, at: Vector2, clearance: float) -> bool:
 	for piece in basin.wall:
 		if piece.support == null and absf(at.x - piece.point.x) < piece.radius * 0.65 + clearance:
@@ -646,6 +666,7 @@ func sync_surface(dt: float) -> void:
 
 func advance(dt: float) -> void:
 	clock += dt
+	snapshot_flash = move_toward(snapshot_flash, 0.0, dt * 2.1)
 	if day_target >= 0.0:
 		day_phase = move_toward(day_phase, day_target, dt * 0.45)
 	elif auto_day_cycle:
@@ -973,10 +994,68 @@ func draw_shore_foreground() -> void:
 	if bird.is_airborne() or scenery.in_front_of_ledge(bird.position):
 		bird.draw(layer, shade_color)
 	rain.draw_drops(layer)
+	draw_discovery_hints(layer)
 	if hovered_animal.z > 0.0:
 		draw_hover_halo(layer, Vector2(hovered_animal.x, hovered_animal.y), hovered_animal.z, hovered_animal.z * 0.78)
 	if holding_animal() or held != null or held_pipe != null or held_floater != null:
 		draw_drop_hint(layer)
+	if snapshot_flash > 0.01:
+		draw_snapshot_frame(layer)
+
+func draw_discovery_hints(canvas: Node2D) -> void:
+	var pulse := 0.65 + 0.35 * sin(clock * 3.6)
+	if held_pipe != null:
+		for basin: Pool in [model, lower]:
+			for piece in basin.wall:
+				if piece.kind != Pool.EARTH or piece == preview_pipe_host:
+					continue
+				if basin.pipes.any(func(p: Pool.DrainPipe) -> bool: return p != held_pipe and p.host == piece):
+					continue
+				var at := piece_screen(piece)
+				draw_dashed_ellipse(canvas, at, piece.radius * 0.90, piece.radius * 0.56,
+					Color("#a8e8d8", 0.74 * pulse), Color("#162825", 0.56 * pulse), 10)
+		return
+	if held_floater != null:
+		if can_fuel_hearth(held_floater) and not hearth.contains(pointer):
+			draw_dashed_ellipse(canvas, Hearth.CENTER, Hearth.RADIUS.x + 1.5, Hearth.RADIUS.y + 1.5,
+				Color("#f7c97e", 0.78 * pulse), Color("#26170e", 0.58 * pulse), 12)
+			for i in 2:
+				var lift := fposmod(clock * 0.65 + i * 0.5, 1.0)
+				var speck := snap_pixel(Hearth.CENTER + Vector2((i - 0.5) * 8.0, -3.5 - lift * 6.0))
+				canvas.draw_rect(Rect2(speck, Vector2(1.0, 1.0)), Color("#fde2a4", (1.0 - lift) * 0.80 * pulse))
+		elif held_floater.forage in [Forage.FLOWER, Forage.FOXTAIL]:
+			var hovered_host := decoration_host(pointer)
+			for basin: Pool in [model, lower]:
+				for piece in basin.wall:
+					if piece == hovered_host or piece.kind != Pool.STONE:
+						continue
+					var crown := snap_pixel(piece_screen(piece) - Vector2(0.0, piece.radius * 0.35))
+					var sparkle := Color("#fceab8", 0.78 * pulse)
+					canvas.draw_rect(Rect2(crown - Vector2(1.5, 0.0), Vector2(3.5, 0.5)), sparkle)
+					canvas.draw_rect(Rect2(crown - Vector2(0.0, 1.5), Vector2(0.5, 3.5)), sparkle)
+		return
+	if not holding_animal() and held == null and hearth.can_ignite() and not hovered_hearth:
+		for i in 2:
+			var phase := fposmod(clock * 0.55 + i * 0.5, 1.0)
+			var glint := snap_pixel(Hearth.CENTER + Vector2((i - 0.5) * 6.0 + sin(clock * 2.0 + i) * 1.2, -2.5 - phase * 4.5))
+			canvas.draw_rect(Rect2(glint, Vector2(1.0, 1.0)), Color("#fad288", sin(phase * PI) * 0.82))
+
+func draw_snapshot_frame(canvas: Node2D) -> void:
+	var a := snapshot_flash * snapshot_flash
+	canvas.draw_rect(Rect2(Vector2.ZERO, SIZE), Color(1.0, 0.97, 0.90, a * 0.14))
+	var ink := Color(0.98, 0.94, 0.84, a * 0.82)
+	var shadow := Color(0.12, 0.11, 0.08, a * 0.45)
+	for corner in [
+		[Vector2(8, 8), Vector2(1, 1)],
+		[Vector2(SIZE.x - 8, 8), Vector2(-1, 1)],
+		[Vector2(8, SIZE.y - 8), Vector2(1, -1)],
+		[Vector2(SIZE.x - 8, SIZE.y - 8), Vector2(-1, -1)],
+	]:
+		var c: Vector2 = corner[0]
+		var d: Vector2 = corner[1]
+		var pts := PackedVector2Array([c + Vector2(d.x * 9.0, 0.0), c, c + Vector2(0.0, d.y * 9.0)])
+		canvas.draw_polyline(pts, shadow, 2.0)
+		canvas.draw_polyline(pts, ink, 0.75)
 
 func draw_pond_edge(basin: Pool, fallback: float) -> void:
 	if basin.wall.is_empty():

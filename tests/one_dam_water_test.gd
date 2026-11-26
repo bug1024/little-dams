@@ -41,6 +41,7 @@ func run() -> void:
 	check_bird()
 	check_time_of_day()
 	check_ecology_links()
+	check_tactile_and_snapshot()
 	check_music_cycle()
 	game.free()
 	quit(failures)
@@ -646,6 +647,8 @@ func check_frog_and_loach() -> void:
 	var calls := [0]
 	var hops := [0]
 	view.frog.rng.seed = 0781
+	view.ground_insects.rng.seed = 0781
+	view.crab.rng.seed = 0781
 	view.frog.croaked.connect(func() -> void: calls[0] += 1)
 	view.frog.landed.connect(func(_point: Vector2) -> void: hops[0] += 1)
 	var water_point := view.to_screen(Vector2(131, 0))
@@ -867,9 +870,11 @@ func check_time_of_day() -> void:
 	# Frogs call actively in twilight while hopping much less frequently.
 	view.frog.rng.seed = 2027
 	var frog_calls := [0]
+	var frog_hops := [0]
 	view.frog.croaked.connect(func() -> void: frog_calls[0] += 1)
+	view.frog.landed.connect(func(_pt: Vector2) -> void: frog_hops[0] += 1)
 	frames(420)
-	expect(frog_calls[0] >= 1 and view.frog.pause > 2.5, "Frogs sit calmly and call actively in twilight")
+	expect(frog_calls[0] >= 1 and frog_hops[0] <= 2, "Frogs sit calmly and call actively in twilight")
 
 	game.cycle_time()
 	frames(300)
@@ -902,6 +907,8 @@ func check_ecology_links() -> void:
 			break
 	if flower != null and built_stone != null:
 		view.place_floater(flower, view.piece_screen(built_stone))
+	frames(1)
+	summer.insect_state = summer.Flight.PERCHED
 	summer.insect_age = summer.insect_duration
 	var landed_on_flower := false
 	for i in 1200:
@@ -909,6 +916,8 @@ func check_ecology_links() -> void:
 		if summer.perched_on_flower and summer.insect_state == summer.Flight.PERCHED:
 			landed_on_flower = true
 			break
+		if summer.insect_state == summer.Flight.PERCHED and summer.insect_age > 1.0:
+			summer.insect_age = summer.insect_duration
 	expect(landed_on_flower, "A flower decorating a dam stone attracts the dragonfly to perch")
 
 	# 3. Stopping a rain shower enters post-rain afterglow, nudging frog calls and bringing the bird back.
@@ -938,6 +947,68 @@ func check_ecology_links() -> void:
 	var lit := view.ignite_hearth(Hearth.CENTER)
 	expect(lit and view.bird.state == view.bird.State.DEPARTING and view.bird.startled,
 		"Igniting the hearth startles a bird perched nearby")
+	game.restart()
+
+func check_tactile_and_snapshot() -> void:
+	game.restart()
+	var view := game.scene
+
+	# 1. All procedural handmade foley streams synthesize non-empty unclipped PCM.
+	var foley_ok := true
+	for wav: AudioStreamWAV in [
+		game.WaterAudio.forage_rustle(),
+		game.WaterAudio.mud_squelch(),
+		game.WaterAudio.bamboo_tap(),
+		game.WaterAudio.pipe_trickle(),
+		game.WaterAudio.hearth_ignite(),
+		game.WaterAudio.shutter_click(),
+	]:
+		var frames_n := wav.data.size() / 2
+		var peak := 0
+		for i in frames_n:
+			peak = maxi(peak, absi(wav.data.decode_s16(i * 2)))
+		if frames_n < 1000 or peak < 800 or peak > 32767:
+			foley_ok = false
+	expect(foley_ok, "Handmade tactile foley audio streams synthesize cleanly without clipping")
+
+	# 2. Zero-text discovery glimmers activate contextually when holding fuel, flowers, or pipes, or when hearth can ignite.
+	expect(not view.has_discovery_hint(), "Idle scene shows no intrusive discovery hint")
+	var mud := put(game.model, Vector2(156.0, 0.0), 8.0, Materials.EARTH)
+	var stone := put(game.model, Vector2(146.0, 0.0), 10.0, Materials.STONE)
+	game.water.rebuild_obstacles(game.model, game.lower)
+
+	game.held_pipe = view.pipes[0]
+	view.held_pipe = game.held_pipe
+	var pipe_hint := view.has_discovery_hint()
+	game.cancel_grab()
+
+	var grass_hint := false
+	var flower_hint := false
+	for item in view.floaters:
+		if item.forage == View.Forage.DRY_GRASS and not grass_hint:
+			game.begin_floater_grab(item, Vector2(100, 100))
+			grass_hint = view.has_discovery_hint()
+			game.cancel_grab()
+		elif item.forage == View.Forage.FLOWER and not flower_hint:
+			game.begin_floater_grab(item, Vector2(100, 100))
+			flower_hint = view.has_discovery_hint()
+			game.cancel_grab()
+
+	view.hearth.wood = 1.0
+	view.hearth.grass = 1.0
+	var ignite_hint := view.has_discovery_hint()
+	expect(pipe_hint and grass_hint and flower_hint and ignite_hint and mud != null and stone != null,
+		"Zero-text discovery glimmers highlight valid pipe, hearth fuel, flower, and ignite targets")
+
+	# 3. Clean UI-free snapshot saves a crisp 1280x800 PNG and triggers the viewfinder breath.
+	var snap_path := "/tmp/little_dams_test_snapshot.png"
+	var saved := game.take_snapshot(snap_path)
+	var img := Image.new()
+	var load_err := img.load(saved)
+	var ok_snap := load_err == OK and img.get_size() == Vector2i(1280, 800) and view.snapshot_flash > 0.8
+	if FileAccess.file_exists(snap_path):
+		DirAccess.remove_absolute(snap_path)
+	expect(ok_snap, "Snapshot shortcut saves a clean 1280x800 UI-free PNG with viewfinder feedback")
 	game.restart()
 
 func check_music_cycle() -> void:

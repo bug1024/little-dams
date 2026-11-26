@@ -150,6 +150,186 @@ static func bird_flutter() -> AudioStreamWAV:
 	stream.data = samples
 	return stream
 
+static func forage_rustle() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.18
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6121
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var hp_prev := 0.0
+	var lp := 0.0
+	var snap_phase := 0.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var t := time / DURATION
+		var env := smoothstep(0.0, 0.14, t) * (1.0 - smoothstep(0.35, 1.0, t))
+		var white := rng.randf_range(-1.0, 1.0)
+		var hp := white - hp_prev
+		hp_prev = white
+		lp += (hp - lp) * 0.42
+		var stem := 0.0
+		if time >= 0.022 and time <= 0.058:
+			var st := (time - 0.022) / 0.036
+			snap_phase += TAU * lerpf(2100.0, 1350.0, st) / RATE
+			stem = sin(snap_phase) * (1.0 - st) * 0.42
+		var val := lp * env * 1.15 + stem
+		samples.encode_s16(i * 2, clampi(roundi(val * 11000.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
+static func mud_squelch() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.22
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6287
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var thump_phase := 0.0
+	var squelch_phase := 0.0
+	var low := 0.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var t := time / DURATION
+		var env := smoothstep(0.0, 0.08, t) * (1.0 - smoothstep(0.28, 1.0, t))
+		thump_phase += TAU * lerpf(98.0, 56.0, t) / RATE
+		squelch_phase += TAU * (340.0 + sin(t * PI * 3.0) * 140.0) / RATE
+		var white := rng.randf_range(-1.0, 1.0)
+		low += (white - low) * 0.14
+		var thump := sin(thump_phase) * exp(-t * 4.5) * 0.72
+		var wet := (low * 1.25 + sin(squelch_phase) * 0.22) * smoothstep(0.04, 0.24, t) * (1.0 - t)
+		samples.encode_s16(i * 2, clampi(roundi((thump + wet) * env * 13500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
+static func bamboo_tap() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.14
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6449
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var p1 := 0.0
+	var p2 := 0.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var t := time / DURATION
+		var env := smoothstep(0.0, 0.03, t) * exp(-t * 6.8)
+		p1 += TAU * 590.0 / RATE
+		p2 += TAU * 1210.0 / RATE
+		var click := rng.randf_range(-1.0, 1.0) * exp(-t * 28.0) * 0.35
+		var wood := (sin(p1) * 0.68 + sin(p2) * 0.32) * env + click
+		samples.encode_s16(i * 2, clampi(roundi(wood * 12500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
+static func pipe_trickle() -> AudioStreamWAV:
+	const RATE := 22050
+	const FRAMES := RATE * 3
+	const FADE := 3000
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6571
+	var buffer := PackedFloat32Array()
+	buffer.resize(FRAMES + FADE)
+	var low := 0.0
+	var body := 0.0
+	var drop_amp := 0.0
+	var drop_phase := 0.0
+	var drop_freq := 1200.0
+	for i in buffer.size():
+		var white := rng.randf_range(-1.0, 1.0)
+		low += (white - low) * 0.34
+		body += (low - body) * 0.12
+		if rng.randf() < 0.0022:
+			drop_amp = rng.randf_range(0.15, 0.42)
+			drop_phase = 0.0
+			drop_freq = rng.randf_range(920.0, 1680.0)
+		drop_phase += TAU * drop_freq / RATE
+		drop_amp *= 0.992
+		buffer[i] = (low - body) * 0.85 + sin(drop_phase) * drop_amp * 0.45
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	for i in FRAMES:
+		var value := buffer[i]
+		if i < FADE:
+			value = lerpf(buffer[FRAMES + i], value, smoothstep(0.0, 1.0, float(i) / FADE))
+		samples.encode_s16(i * 2, clampi(roundi(value * 18000.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_end = FRAMES
+	return stream
+
+static func hearth_ignite() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.42
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6709
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var low := 0.0
+	var body := 0.0
+	var pop_amp := 0.0
+	var pop_phase := 0.0
+	var pop_freq := 1600.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var t := time / DURATION
+		var bloom := smoothstep(0.0, 0.18, t) * (1.0 - smoothstep(0.32, 1.0, t))
+		var white := rng.randf_range(-1.0, 1.0)
+		low += (white - low) * 0.11
+		body += (low - body) * 0.03
+		if (time > 0.08 and rng.randf() < 0.0025):
+			pop_amp = rng.randf_range(0.25, 0.60)
+			pop_phase = 0.0
+			pop_freq = rng.randf_range(1200.0, 2600.0)
+		pop_phase += TAU * pop_freq / RATE
+		pop_amp *= 0.985
+		var val := (low - body * 0.35) * bloom * 2.2 + (sin(pop_phase) * 0.6 + white * 0.4) * pop_amp * 0.55
+		samples.encode_s16(i * 2, clampi(roundi(val * 14500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
+static func shutter_click() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.12
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6841
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var p := 0.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var c1 := exp(-time * 130.0)
+		var c2 := exp(-maxf(0.0, time - 0.052) * 150.0) if time >= 0.052 else 0.0
+		p += TAU * (1450.0 if time < 0.052 else 1120.0) / RATE
+		var tick := (sin(p) * 0.52 + rng.randf_range(-0.48, 0.48)) * (c1 * 0.9 + c2 * 0.65)
+		samples.encode_s16(i * 2, clampi(roundi(tick * 11500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
 static func quiet_rain() -> AudioStreamWAV:
 	const RATE := 22050
 	const FRAMES := RATE * 5
