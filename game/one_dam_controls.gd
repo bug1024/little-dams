@@ -98,8 +98,8 @@ func configure(button: Button, title: String, variant: Action, action: Callable,
 	button.add_theme_font_size_override("font_size", FONT_SIZE)
 	button.add_theme_constant_override("h_separation", 8)
 	var width: int = BUTTON_WIDTHS[variant]
-	var wood: Color = [Color("#735a36"), Color("#594735"), Color("#48574e"), Color("#605343")][variant]
-	var highlight: Color = Color("#d1b26b") if variant == Action.RELEASE else Color.TRANSPARENT
+	var wood: Color = Color("#61503b") if variant == Action.RELEASE else Color("#574a3b")
+	var highlight: Color = Color("#bfa268") if variant == Action.RELEASE else Color.TRANSPARENT
 	apply_plaque_theme(button, width, wood, highlight, variant == Action.RELEASE)
 	button.add_theme_color_override("icon_disabled_color", Color("#989b91"))
 	button.custom_minimum_size = Vector2(width, BUTTON_HEIGHT)
@@ -121,19 +121,19 @@ func apply_plaque_theme(button: Button, width: int, wood: Color, highlight := Co
 func set_rain_active(button: Button, active: bool) -> void:
 	var width: int = BUTTON_WIDTHS[Action.RAIN]
 	if active:
-		apply_plaque_theme(button, width, Color("#3d5958"), Color("#8ec5c0"))
+		apply_plaque_theme(button, width, Color("#42504d"), Color("#85b3af"))
 		button.icon = make_icon(Action.RAIN, false, true)
 	else:
-		apply_plaque_theme(button, width, Color("#48574e"))
+		apply_plaque_theme(button, width, Color("#574a3b"))
 		button.icon = make_icon(Action.RAIN, false, false)
 
 func set_music_enabled(button: Button, enabled: bool) -> void:
 	var width: int = BUTTON_WIDTHS[Action.MUSIC]
 	if enabled:
-		apply_plaque_theme(button, width, Color("#605343"))
+		apply_plaque_theme(button, width, Color("#574a3b"))
 		button.icon = make_icon(Action.MUSIC, false, false)
 	else:
-		apply_plaque_theme(button, width, Color("#49453d"), Color.TRANSPARENT, false, true)
+		apply_plaque_theme(button, width, Color("#4b443a"), Color.TRANSPARENT, false, true)
 		button.icon = make_icon(Action.MUSIC, true, false)
 
 func make_lettering() -> FontFile:
@@ -181,7 +181,7 @@ func make_plaque(width: int, wood: Color, state: String, highlight := Color.TRAN
 	if state == "hover":
 		wood = wood.lightened(0.12)
 	elif state == "disabled":
-		wood = Color("#46493f") if primary else wood.lerp(Color("#414438"), 0.72)
+		wood = Color("#49463d") if primary else wood.lerp(Color("#414438"), 0.72)
 	var edge := Color("#2b2b20")
 	# Pixel drop shadow beneath the wooden plaque; shrinks when pressed down.
 	if state == "pressed":

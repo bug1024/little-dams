@@ -10,13 +10,14 @@ const Air = preload("res://game/one_dam_air.gd")
 const Rain = preload("res://game/one_dam_rain.gd")
 const GroundInsects = preload("res://game/one_dam_ground_insects.gd")
 const Frog = preload("res://game/one_dam_frog.gd")
+const Crab = preload("res://game/one_dam_crab.gd")
 const Hearth = preload("res://game/one_dam_hearth.gd")
 const Scenery = preload("res://game/one_dam_scenery.gd")
 const SIZE := Vector2(320, 200)
 const CHANNEL_MASK := preload("res://game/one_dam_channel.png")
 const PLATE := preload("res://game/one_dam_plate.png")
 const PAPER := Color("#f7dda2")
-const FOAM := Color("#c2f8ef")
+const FOAM := Color("#d7ebe0")
 const LEAF_CLEARANCE := 1.45
 const ROCK_LEDGE_FEET := [
 	Rect2(67, 78, 20, 9), Rect2(117, 74, 29, 11), Rect2(172, 64, 27, 10),
@@ -106,6 +107,7 @@ var ground_light := ShaderMaterial.new()
 var summer := Summer.new()
 var ground_insects := GroundInsects.new()
 var frog := Frog.new()
+var crab := Crab.new()
 var wind := Wind.new()
 var rain := Rain.new()
 var hearth := Hearth.new()
@@ -178,6 +180,7 @@ func _ready() -> void:
 	summer.fish_surface.connect(func(point: Vector2) -> void:
 		ripples.append(Vector4(point.x, point.y, 0.0, 0.23)))
 	frog.landed.connect(on_frog_landed)
+	crab.landed.connect(on_crab_landed)
 	air.wind = wind
 	air.view = self
 	air.z_index = 2
@@ -221,6 +224,7 @@ func clear() -> void:
 	hearth.reset()
 	ground_insects.reset(to_screen)
 	frog.reset()
+	crab.reset()
 	summer.fish_held = false
 	summer.fish_stranded = false
 	summer.fish_released = false
@@ -623,20 +627,27 @@ func sync_surface(dt: float) -> void:
 func advance(dt: float) -> void:
 	clock += dt
 	wind.advance(dt)
-	scenery.advance(dt, wind, rain.wetness, rain.intensity)
 	hearth.advance(dt, rain.intensity, wind)
+	var hearth_glow := Vector3(Hearth.CENTER.x / SIZE.x, Hearth.CENTER.y / SIZE.y, hearth.firelight)
+	scenery.advance(dt, wind, rain.wetness, rain.intensity, hearth_glow)
 	advance_surge(dt)
 	advance_riffle(dt)
 	advance_floaters(dt)
 	advance_streaks(dt)
 	summer.advance(dt, water)
 	ground_insects.frog_blocker = frog.position if frog.duration <= 0.0 else Vector2.INF
+	ground_insects.crab_blocker = crab.position if not crab.held else Vector2.INF
 	refresh_insect_terrain()
 	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple)
 	frog.advance(dt, frog_clear)
+	var pointer_busy := holding_animal() or held != null or held_pipe != null or held_floater != null
+	crab.advance(dt, pointer, pointer_busy, ground_insects.rocks, to_screen, from_screen, insect_in_water,
+		water, surge_at, crab_clear, insect_ripple, [ground_insects.mole.position, ground_insects.mantis.position, frog.position])
 	for crawler in [ground_insects.mole, ground_insects.mantis]:
 		if crawler != ground_insects.held:
 			summer.disturb_perch(crawler.position)
+	if not crab.held:
+		summer.disturb_perch(crab.position)
 	air.advance(dt)
 	rain.advance_drops(dt, self)
 	sync_surface(dt)
@@ -652,6 +663,7 @@ func advance(dt: float) -> void:
 	surface.set_shader_parameter("sun_drift", wind.sunlight)
 	ground_light.set_shader_parameter("rain_wetness", rain.wetness)
 	ground_light.set_shader_parameter("rain_intensity", rain.intensity)
+	ground_light.set_shader_parameter("hearth_light", hearth_glow)
 	surface.set_shader_parameter("rain_intensity", rain.intensity)
 
 	advance_rolls(dt)
@@ -695,26 +707,45 @@ func insect_ripple(point: Vector2) -> void:
 func frog_clear(point: Vector2) -> bool:
 	if not summer.cicada_held and point.distance_to(summer.cicada_position) < 7.5:
 		return false
+	if not crab.held and point.distance_to(crab.position) < 10.0:
+		return false
 	return point.distance_to(ground_insects.mole.position) >= GroundInsects.CLEARANCE and point.distance_to(ground_insects.mantis.position) >= 12.0 and (
 		summer.insect_state != Summer.Flight.PERCHED or point.distance_to(summer.insect_position) >= 9.0)
+
+func crab_clear(point: Vector2) -> bool:
+	if not summer.cicada_held and point.distance_to(summer.cicada_position) < 7.5:
+		return false
+	if not frog.held and point.distance_to(frog.position) < 10.0:
+		return false
+	return point.distance_to(ground_insects.mole.position) >= GroundInsects.CLEARANCE and point.distance_to(ground_insects.mantis.position) >= 11.0 and (
+		summer.insect_state != Summer.Flight.PERCHED or point.distance_to(summer.insect_position) >= 8.5)
 
 func on_frog_landed(point: Vector2) -> void:
 	var local := from_screen(point)
 	if insect_in_water(local):
 		burst(local, 0.31)
 
+func on_crab_landed(point: Vector2) -> void:
+	var local := from_screen(point)
+	if insect_in_water(local):
+		burst(local, 0.25)
+
 func holding_animal() -> bool:
-	return ground_insects.held != null or summer.insect_held or summer.fish_held or frog.held or summer.cicada_held
+	return ground_insects.held != null or summer.insect_held or summer.fish_held or frog.held or crab.held or summer.cicada_held
 
 func cancel_animal_grab() -> void:
 	ground_insects.held = null
 	summer.insect_held = false
 	summer.fish_held = false
 	frog.held = false
+	crab.held = false
 	summer.cicada_held = false
 
 func grab_animal(point: Vector2) -> bool:
 	if ground_insects.grab(point):
+		return true
+	if crab.position.distance_to(point) <= 7.5:
+		crab.held = true
 		return true
 	if summer.cicada_position.distance_to(point) <= 5.5:
 		summer.cicada_held = true
@@ -733,10 +764,14 @@ func can_place_animal(point: Vector2) -> bool:
 		return false
 	if not frog.held and point.distance_to(frog.position) < GroundInsects.CLEARANCE:
 		return false
+	if not crab.held and point.distance_to(crab.position) < 9.5:
+		return false
 	if not summer.cicada_held and point.distance_to(summer.cicada_position) < 6.0:
 		return false
 	if summer.cicada_held and summer.insect_state == Summer.Flight.PERCHED and point.distance_to(summer.insect_position) < 8.0:
 		return false
+	if crab.held:
+		return crab_clear(point)
 	if frog.held or summer.fish_held:
 		return frog_clear(point)
 	if ground_insects.held != null:
@@ -749,6 +784,9 @@ func place_animal(point: Vector2) -> void:
 		return
 	var local := from_screen(point)
 	var wet := insect_in_water(local)
+	if crab.held:
+		crab.place(point, wet)
+		return
 	if frog.held:
 		frog.place(point)
 		on_frog_landed(point)
@@ -780,6 +818,8 @@ func animal_hover_target(point: Vector2) -> Vector3:
 		return Vector3(mole_pos.x, mole_pos.y, 5.5)
 	if mantis_dist <= 7.0:
 		return Vector3(mantis_pos.x, mantis_pos.y, 7.5)
+	if crab.position.distance_to(point) <= 7.5:
+		return Vector3(crab.position.x, crab.position.y, 6.5)
 	if summer.cicada_position.distance_to(point) <= 5.5:
 		return Vector3(summer.cicada_position.x, summer.cicada_position.y, 5.5)
 	if summer.insect_position.distance_to(point) <= 9.0:
@@ -800,7 +840,15 @@ func env_modulate(screen_pos: Vector2) -> Color:
 	var light := Color.WHITE.lerp(Color(0.84, 0.89, 0.95), shade * 0.42)
 	light = light.lerp(Color(1.04, 1.01, 0.95), (1.0 - shade) * sun_factor * 0.22)
 	light *= Color.WHITE.lerp(Color(0.75, 0.82, 0.90), rain.wetness * 0.82)
+	if hearth.firelight > 0.005:
+		var d := screen_pos.distance_to(Hearth.CENTER)
+		var glow := pow(maxf(0.0, 1.0 - d / 48.0), 2.0) * hearth.firelight * (0.72 + rain.wetness * 0.38)
+		light += Color(0.28, 0.13, 0.035, 0.0) * glow
 	return Color(light.r, light.g, light.b, 1.0)
+
+func foam_ink(alpha := 1.0) -> Color:
+	var tone := Color("#dceee2").lerp(Color("#c7dfdf"), rain.intensity)
+	return Color(tone, alpha)
 
 func shade_color(base: Color, screen_pos: Vector2) -> Color:
 	var mod := env_modulate(screen_pos)
@@ -810,6 +858,8 @@ func _draw() -> void:
 	if water == null:
 		return
 	summer.draw_fish(self, to_screen, pointer)
+	if crab.wet and not crab.held:
+		crab.draw(self, pointer, shade_color)
 	draw_pond_edge(model, 146.0)
 	draw_pond_edge(lower, 262.0)
 	draw_current()
@@ -841,6 +891,8 @@ func _draw() -> void:
 	summer.draw_fish(self, to_screen, pointer, true)
 	if not scenery.in_front_of_ledge(pointer if frog.held else frog.position):
 		frog.draw(self, pointer, shade_color)
+	if (not crab.wet or crab.held) and not scenery.in_front_of_ledge(pointer if crab.held else crab.position):
+		crab.draw(self, pointer, shade_color)
 	hearth.draw_flame(self)
 
 func draw_shore_foreground() -> void:
@@ -849,6 +901,8 @@ func draw_shore_foreground() -> void:
 	ground_insects.draw(layer, pointer, false, scenery.in_front_of_ledge, true, shade_color)
 	if scenery.in_front_of_ledge(pointer if frog.held else frog.position):
 		frog.draw(layer, pointer, shade_color)
+	if (not crab.wet or crab.held) and scenery.in_front_of_ledge(pointer if crab.held else crab.position):
+		crab.draw(layer, pointer, shade_color)
 	rain.draw_drops(layer)
 	if hovered_animal.z > 0.0:
 		draw_hover_halo(layer, Vector2(hovered_animal.x, hovered_animal.y), hovered_animal.z, hovered_animal.z * 0.78)
@@ -877,7 +931,7 @@ func draw_pond_edge(basin: Pool, fallback: float) -> void:
 		draw_polyline(curve, Color(0.61, 0.79, 0.75, height * shimmer * 0.75), 0.5)
 		if height > 0.35:
 			var eddy := p + Vector2(-6.0 - shimmer * 4.0, extent * 0.2)
-			draw_line(snap_pixel(eddy), snap_pixel(eddy + Vector2(3.2, -1.1)), Color(FOAM, height * shimmer * 0.27), 0.5)
+			draw_line(snap_pixel(eddy), snap_pixel(eddy + Vector2(3.2, -1.1)), foam_ink(height * shimmer * 0.27), 0.5)
 
 func draw_current() -> void:
 	for i in streaks.size():
@@ -894,7 +948,7 @@ func draw_current() -> void:
 		if not is_wet(end):
 			continue
 		var strength := smoothstep(7.0, 57.0, speed)
-		draw_line(from, snap_pixel(to_screen(end)), Color(FOAM, clampf(0.08 + (strength * 0.28 + push * 0.10) * foam_strength, 0.0, 0.52)), 0.5)
+		draw_line(from, snap_pixel(to_screen(end)), foam_ink(clampf(0.08 + (strength * 0.28 + push * 0.10) * foam_strength, 0.0, 0.52)), 0.5)
 
 func draw_surge_current() -> void:
 	for x in Flow.COLUMNS:
@@ -917,10 +971,10 @@ func draw_surge_current() -> void:
 			var start := snap_pixel(to_screen(behind))
 			var end := snap_pixel(to_screen(at))
 			draw_line(start, end, Color("#83b9b2", life * 0.30), 1.0)
-			draw_line(snap_pixel(start.lerp(end, 0.51)), end, Color("#e4f8ed", life * 0.48), 0.5)
+			draw_line(snap_pixel(start.lerp(end, 0.51)), end, foam_ink(life * 0.48), 0.5)
 			if push > 0.42:
 				var foam := to_screen(at + axis.orthogonal() * sin(seed) * 2.1)
-				draw_rect(Rect2(snap_pixel(foam), Vector2(1.5, 0.5)), Color(FOAM, life * 0.44))
+				draw_rect(Rect2(snap_pixel(foam), Vector2(1.5, 0.5)), foam_ink(life * 0.44))
 
 func draw_ripples() -> void:
 	for ripple in ripples:
@@ -928,7 +982,7 @@ func draw_ripples() -> void:
 		var elapsed := ripple.z
 		center += water.velocity_at(center).limit_length(32.0) * (elapsed * 0.32)
 		var radius := 1.8 + elapsed * (8.7 + ripple.w * 3.1)
-		var ink := Color(FOAM, (1.0 - smoothstep(0.13, 1.85, elapsed)) * minf(0.75, ripple.w * 0.91))
+		var ink := foam_ink((1.0 - smoothstep(0.13, 1.85, elapsed)) * minf(0.75, ripple.w * 0.91))
 		for i in 18:
 			var angle := i * TAU / 18.0
 			var sample := center + Vector2.from_angle(angle) * radius
@@ -1313,6 +1367,10 @@ func forage_axis(item: Floater) -> Vector2:
 	var light := wind.flutter(roundi(item.shore.x) + 41) * (0.55 if item.forage == Forage.THIN_BRANCH else 1.25)
 	if item != held_floater and not item.rooted and not item.planted and item.host == null:
 		return Vector2.from_angle(item.angle) * length
+	if item.rooted:
+		var dir := -1.0 if int(item.shore.x) % 2 == 0 else 1.0
+		var slant := dir * (1.8 + fposmod(item.shore.x * 0.37, 2.2)) + light
+		return Vector2(slant, -length)
 	return Vector2(2.0 + light, -length)
 
 func draw_forage(item: Floater, carried: bool) -> void:
@@ -1324,6 +1382,8 @@ func draw_forage(item: Floater, carried: bool) -> void:
 	elif item.forage == Forage.DRY_GRASS:
 		var direction := axis.normalized()
 		var side := direction.orthogonal()
+		if not carried:
+			draw_line(snap_pixel(base + Vector2(-1.5, 1.0)), snap_pixel(base + direction * 5.0 + Vector2(0, 1.0)), Color("#28221966"), 1.5)
 		for i in 6:
 			var spread := float(i) - 2.5
 			var strand := snap_pixel(base + direction * (6.2 + i % 3) + side * spread * 0.79)
@@ -1338,18 +1398,26 @@ func draw_forage(item: Floater, carried: bool) -> void:
 		var twig_tip := snap_pixel(joint + axis * 0.24 + axis.normalized().orthogonal() * 2.8)
 		draw_line(joint, twig_tip, shade_color(item.tint.darkened(0.15 + item.soaked * 0.3), base), 0.65)
 	else:
+		if item.rooted and not carried:
+			draw_rect(Rect2(snap_pixel(base + Vector2(-2.0, -0.5)), Vector2(4.0, 1.5)), shade_color(Color("#283822"), base))
+			for leaf_off: Vector2 in [Vector2(-2.2, -1.2), Vector2(0.8, -1.4), Vector2(-0.5, -0.5)]:
+				draw_rect(Rect2(snap_pixel(base + leaf_off), Vector2(1.5, 1.0)),
+					shade_color(Color("#4f6635") if leaf_off.x < 0.0 else Color("#687d42"), base))
 		var along := axis.normalized()
 		var side := along.orthogonal()
-		var joint := snap_pixel(base.lerp(tip, 0.50) - side * 0.7)
+		var bow := 0.85 if axis.x >= 0.0 else -0.85
+		var joint := snap_pixel(base.lerp(tip, 0.48) - side * bow)
+		draw_polyline(PackedVector2Array([base, joint, tip]), shade_color(Color("#364225"), base), 1.2)
 		draw_polyline(PackedVector2Array([base, joint, tip]), shade_color(Color("#71814b"), base), 0.75)
-		draw_line(joint, snap_pixel(joint + along * 1.7 + side * 2.2), shade_color(Color("#8e9b58"), base), 0.75)
+		draw_line(joint, snap_pixel(joint + along * 1.6 + side * 2.2), shade_color(Color("#8e9b58"), base), 0.75)
 		if item.forage == Forage.FOXTAIL:
-			var seed_start := snap_pixel(tip - along * 4.4)
-			draw_line(seed_start, tip, shade_color(item.tint.darkened(0.33), base), 2.5)
+			var seed_start := snap_pixel(tip - along * 4.8)
+			draw_line(seed_start, tip, shade_color(item.tint.darkened(0.35), base), 2.5)
 			draw_line(snap_pixel(seed_start - side * 0.4), snap_pixel(tip - side * 0.4), shade_color(item.tint, base), 1.5)
-			draw_line(snap_pixel(tip - along - side), snap_pixel(seed_start + along - side), shade_color(item.tint.lightened(0.19), base), 0.5)
+			draw_line(snap_pixel(tip - along - side * 0.8), snap_pixel(seed_start + along - side * 0.8), shade_color(item.tint.lightened(0.22), base), 0.5)
 		else:
-			for offset in [Vector2(-2, -0.5), Vector2(0, -2), Vector2(1.5, -0.5), Vector2(0.5, 1.1), Vector2(-1.2, 1)]:
+			draw_rect(Rect2(snap_pixel(tip - along * 1.2 - Vector2(0.75, 0.5)), Vector2(1.5, 1.0)), shade_color(Color("#475c32"), base))
+			for offset: Vector2 in [Vector2(-2, -0.5), Vector2(0, -2), Vector2(1.5, -0.5), Vector2(0.5, 1.1), Vector2(-1.2, 1)]:
 				var pixel := snap_pixel(tip + offset)
 				draw_rect(Rect2(pixel, Vector2(1.5, 1.5)), shade_color(item.tint.darkened(0.17) if offset.y > 0.0 else item.tint, base))
 			draw_rect(Rect2(tip - Vector2(0.25, 0.25), Vector2.ONE), shade_color(Color("#bd8952"), base))
@@ -1462,8 +1530,9 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 			shadow[i] = snap_pixel(foot + shadow[i] * r * wear_scale)
 		var shadow_dry := Color("#4d3d2c96") if is_earth else Color("#24231da8")
 		var shadow_wet := Color("#1b32307e") if is_earth else Color("#112a2a84")
-		draw_colored_polygon(shadow, shadow_dry.lerp(shadow_wet, effective_damp))
-		if is_earth and seed > 0.42 and r >= 6.0:
+		var shadow_col := shadow_dry.lerp(shadow_wet, effective_damp).lerp(Color("#112e3045"), smoothstep(0.06, 0.35, submersion))
+		draw_colored_polygon(shadow, shadow_col)
+		if is_earth and seed > 0.42 and r >= 6.0 and submersion <= 0.06:
 			for i in 3:
 				var pebble := snap_pixel(foot + Vector2((0.48 + i * 0.20) * r, (i % 2) * 1.5))
 				draw_rect(Rect2(pebble, Vector2(1.0 + (i % 2) * 0.5, 1.0)), shade_color(Color("#7f745b").lerp(Color("#435752"), effective_damp), pebble))
@@ -1475,14 +1544,32 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	var sunlight := smoothstep(0.18, 0.77, p.x / SIZE.x + (1.0 - p.y / SIZE.y) * 0.34)
 	var env := env_modulate(p)
 	var dry := (Color("#d4c8be").lerp(Color("#fff3e2"), sunlight) if is_earth else Color("#c3cdd2").lerp(Color("#fff6e5"), sunlight)) * env
-	var wet := dry * (Color("#637d79") if is_earth else Color("#779997"))
 	var water_row := clampi(roundi((r * (0.71 - submersion * 0.92) - origin.y) * 2.0), 0, int(size.y))
 	draw_set_transform(p, roll, Vector2(wear_scale, squash * wear_scale))
-	draw_texture_rect(carving.texture, Rect2(origin, size * 0.5), false, dry)
-	if effective_damp > 0.0 and water_row < int(size.y):
-		var lower_strip := Rect2(0, water_row, size.x, size.y - water_row)
-		draw_texture_rect_region(carving.texture, Rect2(origin + lower_strip.position * 0.5, lower_strip.size * 0.5),
-			lower_strip, Color(wet, effective_damp * 0.80))
+	if submersion > 0.06 and water_row < int(size.y):
+		if water_row > 0:
+			var upper_strip := Rect2(0, 0, size.x, water_row)
+			draw_texture_rect_region(carving.texture, Rect2(origin, upper_strip.size * 0.5), upper_strip, dry)
+		var sub_height := int(size.y) - water_row
+		var fade_rows := mini(3, sub_height)
+		var fade_start := int(size.y) - fade_rows
+		var shallow_tint := dry * (Color("#66857e") if is_earth else Color("#739a95"))
+		if fade_start > water_row:
+			var shallow_strip := Rect2(0, water_row, size.x, fade_start - water_row)
+			draw_texture_rect_region(carving.texture, Rect2(origin + shallow_strip.position * 0.5, shallow_strip.size * 0.5),
+				shallow_strip, Color(shallow_tint, 0.92))
+		if fade_rows > 0:
+			var bed_tint := dry * (Color("#446a68") if is_earth else Color("#4a7574"))
+			var bed_strip := Rect2(0, fade_start, size.x, fade_rows)
+			draw_texture_rect_region(carving.texture, Rect2(origin + bed_strip.position * 0.5, bed_strip.size * 0.5),
+				bed_strip, Color(bed_tint, 0.62))
+	else:
+		draw_texture_rect(carving.texture, Rect2(origin, size * 0.5), false, dry)
+		if effective_damp > 0.0 and water_row < int(size.y):
+			var wet := dry * (Color("#637d79") if is_earth else Color("#779997"))
+			var lower_strip := Rect2(0, water_row, size.x, size.y - water_row)
+			draw_texture_rect_region(carving.texture, Rect2(origin + lower_strip.position * 0.5, lower_strip.size * 0.5),
+				lower_strip, Color(wet, effective_damp * 0.80))
 	if firelight > 0.01 and hearth_warm_faces.has(piece):
 		draw_texture_rect(hearth_warm_faces[piece], Rect2(origin, size * 0.5), false,
 			Color(dry, firelight * (1.0 - effective_damp * 0.44)))
@@ -1518,12 +1605,12 @@ func draw_piece_water_contact(piece: Pool.Piece, water_y: float, left_x: float, 
 	])
 	draw_polyline(curve, Color("#304b49b8"), 1.0)
 	var foam_curve := PackedVector2Array([curve[0], curve[1], curve[2]])
-	draw_polyline(foam_curve, Color("#c8eee4", clampf(0.45 + flow_force * 0.35, 0.0, 0.88)), 0.5)
+	draw_polyline(foam_curve, foam_ink(clampf(0.45 + flow_force * 0.35, 0.0, 0.88)), 0.5)
 	if flow_force > 0.14:
 		for i in 2:
 			var phase := fposmod(clock * (1.8 + flow_force * 1.6) + i * 0.5 + piece.shade * 0.17, 1.0)
 			var fleck := snap_pixel(Vector2(left_x - 1.0 + phase * width * 0.35, water_y - surge_wave * (1.0 - phase) + (i - 0.5) * 0.75))
-			draw_rect(Rect2(fleck, Vector2(1.0, 0.5)), Color(FOAM, (1.0 - phase) * clampf(0.40 + flow_force * 0.40, 0.0, 0.85)))
+			draw_rect(Rect2(fleck, Vector2(1.0, 0.5)), foam_ink((1.0 - phase) * clampf(0.40 + flow_force * 0.40, 0.0, 0.85)))
 
 func draw_froth() -> void:
 	for item in droplets:
@@ -1537,4 +1624,4 @@ func draw_froth() -> void:
 			var delta := Vector2(cos(angle), sin(angle) * 0.64) * age * speed * strength
 			delta += Vector2(age * 42.0, -sin(age / 0.7 * PI) * (3.0 + i % 5) * strength)
 			var size := Vector2(2, 1) if i % 3 == 0 else Vector2.ONE
-			draw_rect(Rect2((origin + delta).floor(), size), Color(FOAM, alpha))
+			draw_rect(Rect2((origin + delta).floor(), size), foam_ink(alpha))

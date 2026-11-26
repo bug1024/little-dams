@@ -220,6 +220,7 @@ func draw_land(canvas: Node2D, tint_at: Callable = Callable()) -> void:
 	for i in SEDGES.size():
 		var data: Vector3 = SEDGES[i]
 		var root := Vector2(data.x, data.y)
+		canvas.draw_rect(Rect2((root * 2.0).round() * 0.5 - Vector2(1.5, 0.5), Vector2(3.0, 1.25)), apply_tint(Color("#333d20"), root, tint_at))
 		for stem in (4 if data.z >= 5.0 else 3):
 			var span := (stem - 1.4) * 2.0
 			var height := data.z * (0.73 + stem % 3 * 0.16)

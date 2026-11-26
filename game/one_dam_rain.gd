@@ -13,6 +13,7 @@ class Drop:
 	var slant: float
 	var age: float
 	var kind := Contact.GROUND
+	var heavy := false
 
 var enabled := false
 var intensity := 0.0
@@ -21,6 +22,7 @@ var wetness := 0.0
 var puddles := PackedFloat32Array()
 var drops: Array[Drop] = []
 var drop_lag := 0.0
+var drip_due := 0.9
 var rng := RandomNumberGenerator.new()
 
 func _init() -> void:
@@ -34,6 +36,7 @@ func clear() -> void:
 	puddles.fill(0.0)
 	drops.clear()
 	drop_lag = 0.0
+	drip_due = 0.9
 
 func advance(dt: float) -> void:
 	intensity = move_toward(intensity, 1.0 if enabled else 0.0, dt * (0.29 if enabled else 0.41))
@@ -52,6 +55,16 @@ func advance_drops(dt: float, view) -> void:
 		drop.age = -rng.randf_range(0.13, 0.24)
 		drops.append(drop)
 	drop_lag = minf(drop_lag, 1.0)
+	if intensity > 0.08 or wetness > 0.24:
+		drip_due -= dt
+		if drip_due <= 0.0 and drops.size() < 112:
+			var drip := Drop.new()
+			drip.heavy = true
+			drip.at = Vector2(rng.randf_range(20.0, 112.0), rng.randf_range(44.0, 106.0))
+			drip.slant = 0.8 + view.wind.strength_at(drip.at.x / SIZE.x) * 1.2
+			drip.age = -0.26
+			drops.append(drip)
+			drip_due = rng.randf_range(0.35, 0.85) if intensity > 0.08 else rng.randf_range(0.9, 2.2)
 	for index in range(drops.size() - 1, -1, -1):
 		var drop := drops[index]
 		var falling := drop.age < 0.0
@@ -64,6 +77,10 @@ func advance_drops(dt: float, view) -> void:
 				if puddles[i] > 0.10 and offset.length_squared() < pow(spot.z * puddles[i], 2.0):
 					drop.kind = Contact.WATER
 					break
+			if drop.heavy and drop.kind == Contact.WATER:
+				var local: Vector2 = view.from_screen(drop.at)
+				if view.is_wet(local):
+					view.ripples.append(Vector4(local.x, local.y, 0.0, 0.22))
 		if drop.age >= (0.48 if drop.kind == Contact.WATER else 0.23):
 			drops.remove_at(index)
 
@@ -88,21 +105,29 @@ func draw_puddles(canvas: Node2D) -> void:
 func draw_drops(canvas: Node2D) -> void:
 	for drop in drops:
 		if drop.age < 0.0:
-			var at := drop.at + Vector2(drop.slant, 76.0) * drop.age
-			var tail := at - Vector2(drop.slant * 0.23, 4.0)
-			canvas.draw_line(snap(tail), snap(at), Color(0.75, 0.84, 0.83, intensity * 0.46), 0.5)
+			if drop.heavy:
+				var bead := drop.at + Vector2(drop.slant, 48.0) * drop.age
+				var alpha := maxf(0.45, intensity * 0.72)
+				canvas.draw_rect(Rect2(snap(bead - Vector2(0.25, 1.0)), Vector2(0.75, 1.75)), Color(0.84, 0.92, 0.88, alpha))
+			else:
+				var at := drop.at + Vector2(drop.slant, 76.0) * drop.age
+				var tail := at - Vector2(drop.slant * 0.23, 4.0)
+				canvas.draw_line(snap(tail), snap(at), Color(0.76, 0.84, 0.82, intensity * 0.38), 0.5)
 			continue
 		if drop.kind == Contact.WATER:
-			var size := 0.65 + drop.age * 6.5
-			var ink := Color(0.77, 0.88, 0.85, (1.0 - drop.age / 0.48) * 0.62)
+			var size := (0.9 + drop.age * 8.5) if drop.heavy else (0.65 + drop.age * 6.5)
+			var ink := Color(0.82, 0.91, 0.86, (1.0 - drop.age / 0.48) * (0.68 if drop.heavy else 0.54))
 			for side in [-1.0, 1.0]:
 				var start := drop.at + Vector2(side * size, 0)
 				canvas.draw_line(snap(start), snap(drop.at + Vector2(side * size * 0.42, size * 0.38)), ink, 0.5)
 				canvas.draw_line(snap(drop.at + Vector2(side * size * 0.67, -size * 0.28)), snap(start), Color(ink, ink.a * 0.63), 0.5)
+				if drop.heavy and drop.age > 0.08:
+					var inner := size * 0.56
+					canvas.draw_line(snap(drop.at + Vector2(side * inner, 0)), snap(drop.at + Vector2(side * inner * 0.4, inner * 0.34)), Color(ink, ink.a * 0.55), 0.5)
 		else:
 			var fade := 1.0 - drop.age / 0.23
 			var spray := Vector2(1.0 + drop.age * 7.0, -sin(drop.age / 0.23 * PI) * 1.7)
-			var ink := Color(0.78, 0.87, 0.83, fade * (0.75 if drop.kind == Contact.LEAVES else 0.44))
+			var ink := Color(0.79, 0.87, 0.83, fade * (0.72 if drop.kind == Contact.LEAVES else 0.42))
 			canvas.draw_rect(Rect2(snap(drop.at + spray), Vector2(0.5, 0.5)), ink)
 			canvas.draw_rect(Rect2(snap(drop.at + Vector2(-spray.x, spray.y * 0.55)), Vector2(0.5, 0.5)), ink)
 

@@ -28,6 +28,8 @@ var scene := View.new()
 var gate := Button.new()
 var rain_button := Button.new()
 var music_button := Button.new()
+var hud_actions: HBoxContainer
+var hud_idle := 0.0
 var controls_art := Controls.new()
 var music_enabled := true
 var creek: AudioStreamPlayer
@@ -146,6 +148,7 @@ func build_controls() -> void:
 	var overlay := CanvasLayer.new()
 	add_child(overlay)
 	var actions := HBoxContainer.new()
+	hud_actions = actions
 	actions.add_theme_constant_override("separation", 12)
 	actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	overlay.add_child(actions)
@@ -168,6 +171,7 @@ func build_controls() -> void:
 	actions.offset_bottom = -margin.y
 
 func toggle_music() -> void:
+	hud_idle = 0.0
 	music_enabled = not music_enabled
 	music.stream_paused = not music_enabled
 	music_button.text = "音乐开" if music_enabled else "音乐关"
@@ -192,6 +196,7 @@ func water_cue(cue: WaterAudio.Cue) -> AudioStreamPlayer:
 	return player
 
 func restart() -> void:
+	hud_idle = 0.0
 	model.reset()
 	lower.reset()
 	scene.clear()
@@ -216,16 +221,17 @@ func restart() -> void:
 		stone_splash.stop()
 	for row in [[73, 50, 12, 0], [98, 48, 12, 1], [127, 57, 9, 0], [163, 52, 11, 1], [189, 56, 15, 0], [241, 47, 17, 0], [264, 44, 10, 1], [292, 48, 9, 0], [243, -61, 13, 0], [275, -63, 10, 1], [296, -57, 15, 0],
 			[95, -75, 11, 0], [124, -70, 10, 1], [161, -71, 9, 0], [195, -70, 12, 0],
-			[111, -46, 7, Pool.EARTH], [164, -52, 8, Pool.EARTH], [211, 47, 8, Pool.EARTH], [283, 49, 6, Pool.EARTH],
+			[142, -55, 7, Pool.EARTH], [164, -52, 8, Pool.EARTH], [211, 47, 8, Pool.EARTH], [283, 49, 6, Pool.EARTH],
 			[137, 47, 7, Pool.STONE], [227, -45, 7, Pool.STONE], [279, 40, 5, Pool.STONE]]:
 		scene.bank.append(Pool.Piece.new(Vector2(row[0], row[1]), row[2], row[3], row[0] % 4))
 	water.reset(148.0, false)
 	scene.pipes.append(Pool.DrainPipe.new(scene.from_screen(Vector2(117, 160))))
-	scene.pipes.append(Pool.DrainPipe.new(scene.from_screen(Vector2(254, 120))))
+	scene.pipes.append(Pool.DrainPipe.new(scene.from_screen(Vector2(214, 38))))
 	water.rebuild_obstacles(model, lower)
 	gate.disabled = true
 
 func toggle_rain() -> void:
+	hud_idle = 0.0
 	scene.rain.enabled = not scene.rain.enabled
 	rain_button.text = "停雨" if scene.rain.enabled else "下雨"
 	controls_art.set_rain_active(rain_button, scene.rain.enabled)
@@ -250,7 +256,16 @@ func _process(delta: float) -> void:
 		lower_breach.advance(STEP, water)
 		lag -= STEP
 	scene.advance(delta)
-	var pointer := stage_pointer(get_global_mouse_position())
+	var screen_mouse := get_global_mouse_position()
+	if (screen_mouse.x > 660.0 and screen_mouse.y > 650.0) or get_viewport().gui_get_hovered_control() != null:
+		hud_idle = 0.0
+	else:
+		hud_idle += delta
+	if hud_actions != null:
+		var target_alpha := 0.62 if hud_idle > 3.5 else 1.0
+		hud_actions.modulate.a = lerpf(hud_actions.modulate.a, target_alpha,
+			1.0 - exp(-delta * (8.5 if target_alpha > hud_actions.modulate.a else 2.0)))
+	var pointer := stage_pointer(screen_mouse)
 	update_grab(pointer)
 	update_hover(pointer)
 	gate.disabled = model.wall.is_empty() and lower.wall.is_empty()
@@ -530,6 +545,7 @@ func can_return_to_bank(cursor: Vector2) -> bool:
 	return Rect2(Vector2.ZERO, View.SIZE).has_point(cursor) and scene.on_bank(cursor)
 
 func opening() -> void:
+	hud_idle = 0.0
 	if gate_plug != null:
 		finish_gate()
 	var basin := model if not model.wall.is_empty() else lower

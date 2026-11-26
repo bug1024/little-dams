@@ -35,6 +35,9 @@ class Crawler:
 	var art_scale := 1.0
 	var elevation := 0.0
 	var surface_pace := 1.0
+	var best_dist := INF
+	var stall_time := 0.0
+	var last_target := Vector2.INF
 
 var rng := RandomNumberGenerator.new()
 var mole := Crawler.new()
@@ -50,6 +53,7 @@ var close_encounter := false
 var encounter_pause := 0.0
 var mantis_alert := 0.0
 var frog_blocker := Vector2.INF
+var crab_blocker := Vector2.INF
 var rocks: Array[Rock] = []
 
 func reset(project: Callable) -> void:
@@ -64,6 +68,7 @@ func reset(project: Callable) -> void:
 	held = null
 	mantis_patch = MANTIS_PATCH
 	frog_blocker = Vector2.INF
+	crab_blocker = Vector2.INF
 	rocks.clear()
 	mole.position = project.call(Vector2(77, 60))
 	mole.target = mole.position
@@ -74,6 +79,9 @@ func reset(project: Callable) -> void:
 	mole.avoid_side = 0.0
 	mole.art_scale = MOLE_SCALE
 	mole.elevation = 0.0
+	mole.best_dist = INF
+	mole.stall_time = 0.0
+	mole.last_target = Vector2.INF
 	mantis.position = MANTIS_PATCH.get_center()
 	mantis.target = mantis.position
 	mantis.rest = 1.15
@@ -82,6 +90,9 @@ func reset(project: Callable) -> void:
 	mantis.heading = Vector2.LEFT
 	mantis.avoid_side = 0.0
 	mantis.elevation = 0.0
+	mantis.best_dist = INF
+	mantis.stall_time = 0.0
+	mantis.last_target = Vector2.INF
 
 func grab(point: Vector2) -> bool:
 	var mole_distance := (mole.position - Vector2(0, mole.elevation)).distance_to(point)
@@ -94,7 +105,11 @@ func grab(point: Vector2) -> bool:
 
 func can_place_at(point: Vector2) -> bool:
 	var other := mantis if held == mole else mole
-	return other.position.distance_to(point) >= CLEARANCE
+	if other.position.distance_to(point) < CLEARANCE:
+		return false
+	if crab_blocker.is_finite() and crab_blocker.distance_to(point) < CLEARANCE:
+		return false
+	return true
 
 func place(point: Vector2, bank: Vector2, side: float, wet: bool) -> void:
 	held.position = point
@@ -103,6 +118,9 @@ func place(point: Vector2, bank: Vector2, side: float, wet: bool) -> void:
 	held.rest = 0.45
 	held.avoid_side = 0.0
 	held.elevation = 0.0
+	held.best_dist = INF
+	held.stall_time = 0.0
+	held.last_target = Vector2.INF
 	if held == mole:
 		bank_side = side
 		mole_wet = wet
@@ -142,43 +160,142 @@ func climb_height(point: Vector2) -> float:
 			height = maxf(height, rock.height * (1.0 - smoothstep(0.24, 1.0, distance)))
 	return height
 
+func step_clear(crawler: Crawler, start: Vector2, next: Vector2, other: Crawler, patch: Rect2) -> bool:
+	if not patch.has_point(next):
+		return false
+	if blocking_rock(crawler, start, next) != null:
+		return false
+	if not path_clear(start, next, other.position):
+		return false
+	if frog_blocker.is_finite() and not path_clear(start, next, frog_blocker):
+		return false
+	if crab_blocker.is_finite() and not path_clear(start, next, crab_blocker):
+		return false
+	return true
+
+func point_clear(crawler: Crawler, point: Vector2, other: Crawler, patch: Rect2) -> bool:
+	if not patch.has_point(point):
+		return false
+	if blocking_rock(crawler, point, point) != null:
+		return false
+	if point.distance_to(other.position) < CLEARANCE + 1.0:
+		return false
+	if frog_blocker.is_finite() and point.distance_to(frog_blocker) < CLEARANCE + 1.0:
+		return false
+	if crab_blocker.is_finite() and point.distance_to(crab_blocker) < CLEARANCE + 1.0:
+		return false
+	return true
+
 func walk(crawler: Crawler, other: Crawler, dt: float, pace: float, patch: Rect2) -> void:
 	var start := crawler.position
-	if start.distance_to(other.position) < CLEARANCE + 6.0 and crawler.target.distance_to(other.position) < CLEARANCE:
+	if not crawler.target.is_equal_approx(crawler.last_target):
+		crawler.last_target = crawler.target
+		crawler.best_dist = start.distance_to(crawler.target)
+		crawler.stall_time = 0.0
+		crawler.avoid_side = 0.0
+	var target_blocked := blocking_rock(crawler, crawler.target, crawler.target) != null or (
+		crawler.target.distance_to(other.position) < CLEARANCE) or (
+		frog_blocker.is_finite() and crawler.target.distance_to(frog_blocker) < CLEARANCE) or (
+		crab_blocker.is_finite() and crawler.target.distance_to(crab_blocker) < CLEARANCE)
+	if target_blocked and start.distance_to(crawler.target) < 26.0:
 		crawler.target = start
 		crawler.speed = 0.0
+		crawler.avoid_side = 0.0
+		crawler.stall_time = 0.0
 		return
 	var direction := crawler.target - start
+	if direction.length_squared() < 0.0001:
+		crawler.speed = 0.0
+		return
 	var climb := climb_height(start) if crawler == mole else 0.0
 	var stride_pace := pace * crawler.surface_pace * (1.0 - climb * 0.095)
 	var distance := minf(crawler.speed + dt * (180.0 if crawler == mole else 11.0), stride_pace) * dt
 	var next := start.move_toward(crawler.target, distance)
-	var frog_in_path := frog_blocker.is_finite() and not path_clear(start, next, frog_blocker)
-	var rock := blocking_rock(crawler, start, next)
-	if rock != null or frog_in_path or not path_clear(start, next, other.position):
-		var obstacle := rock.center if rock != null else (frog_blocker if frog_in_path else other.position)
+	if not step_clear(crawler, start, next, other, patch):
+		var rock := blocking_rock(crawler, start, next)
+		var frog_in_path := frog_blocker.is_finite() and not path_clear(start, next, frog_blocker)
+		var crab_in_path := crab_blocker.is_finite() and not path_clear(start, next, crab_blocker)
+		var obstacle := other.position
+		if rock != null:
+			obstacle = rock.center
+		elif frog_in_path:
+			obstacle = frog_blocker
+		elif crab_in_path:
+			obstacle = crab_blocker
 		var offset := start - obstacle
-		var outward := (offset / (rock.radius * rock.radius)).normalized() if rock != null else offset.normalized()
+		var outward := Vector2.ZERO
+		if offset.length_squared() < 0.001:
+			outward = -crawler.heading.normalized()
+		elif rock != null:
+			outward = (offset / (rock.radius * rock.radius)).normalized()
+		else:
+			outward = offset.normalized()
 		var tangent := outward.orthogonal()
 		if crawler.avoid_side == 0.0:
 			crawler.avoid_side = 1.0 if direction.dot(tangent) >= 0.0 else -1.0
-		var avoid := (tangent * crawler.avoid_side + outward * 0.48).normalized()
-		next = start + avoid * distance
-		if not patch.has_point(next) or blocking_rock(crawler, start, next) != null:
-			next = start + (outward * 0.48 - tangent * crawler.avoid_side).normalized() * distance
-		if not patch.has_point(next) or blocking_rock(crawler, start, next) != null or not path_clear(start, next, other.position) or (
-			frog_blocker.is_finite() and not path_clear(start, next, frog_blocker)):
+		var side := crawler.avoid_side
+		var dir_norm := direction.normalized()
+		var candidates: Array = [
+			[(tangent * side + outward * 0.48).normalized(), false],
+			[(tangent * side + outward * 0.95).normalized(), false],
+			[outward, false],
+			[(outward * 0.48 - tangent * side).normalized(), true],
+			[(outward * 0.95 - tangent * side).normalized(), true],
+			[(-dir_norm).rotated(side * 0.45), true],
+			[(-dir_norm).rotated(-side * 0.45), true],
+		]
+		var found := false
+		for scale_factor: float in [1.0, 0.5]:
+			for cand in candidates:
+				var move_dir: Vector2 = cand[0]
+				var try_next := start + move_dir * (distance * scale_factor)
+				if step_clear(crawler, start, try_next, other, patch):
+					next = try_next
+					if cand[1]:
+						crawler.avoid_side = -side
+					found = true
+					break
+			if found:
+				break
+		if not found:
 			next = start
-	elif start.distance_to(other.position) > CLEARANCE + 4.0 and blocking_rock(crawler, start, crawler.target) == null:
+	elif start.distance_to(other.position) > CLEARANCE + 4.0 and blocking_rock(crawler, start, crawler.target) == null and (
+		not frog_blocker.is_finite() or start.distance_to(frog_blocker) > CLEARANCE + 4.0) and (
+		not crab_blocker.is_finite() or start.distance_to(crab_blocker) > CLEARANCE + 4.0):
 		crawler.avoid_side = 0.0
 	var step := next - start
 	crawler.position = next
 	crawler.elevation = move_toward(crawler.elevation, climb_height(next) if crawler == mole else 0.0, dt * 38.0)
 	crawler.speed = step.length() / dt
-	if crawler.speed > 0.01:
+	var dist_now := next.distance_to(crawler.target)
+	if dist_now < crawler.best_dist - 0.8:
+		crawler.best_dist = dist_now
+		crawler.stall_time = 0.0
+	elif dist_now > 1.2:
+		crawler.stall_time += dt
+	if step.length() > maxf(0.02, distance * 0.12):
 		var angle := lerp_angle(crawler.heading.angle(), step.angle(), 1.0 - exp(-dt * (21.0 if crawler == mole else 7.0)))
 		crawler.heading = Vector2.from_angle(angle)
 		crawler.stride += step.length()
+
+func pick_mole_target(project: Callable) -> Vector2:
+	var inner_area := ROAM_AREA.grow(-4.0)
+	for attempt in 12:
+		var side := bank_side if attempt < 8 else -bank_side
+		var spread := 22.0 if runs_to_cross == 0 and attempt < 4 else 52.0
+		var x := clampf(mole.position.x + rng.randf_range(-spread, spread), 48.0, 245.0)
+		var candidate: Vector2 = project.call(Vector2(x, side * rng.randf_range(50.0, 70.0)))
+		candidate = candidate.clamp(inner_area.position, inner_area.end)
+		if candidate.distance_to(mole.position) > 10.0 and point_clear(mole, candidate, mantis, inner_area):
+			if side != bank_side:
+				bank_side = side
+			return candidate
+	# Fallback: pick any open spot nearby so the mole never freezes.
+	for attempt in 10:
+		var fallback := (mole.position + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(16.0, 44.0)).clamp(inner_area.position, inner_area.end)
+		if point_clear(mole, fallback, mantis, inner_area):
+			return fallback
+	return mole.position
 
 func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, ripple: Callable) -> void:
 	if dt <= 0.0:
@@ -199,6 +316,12 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 		mole.speed = 0.0
 	else:
 		walk(mole, mantis, dt, WATER_SPEED if mole_wet else 48.0, ROAM_AREA)
+		if mole.stall_time >= 1.35:
+			mole.target = mole.position
+			mole.speed = 0.0
+			mole.avoid_side = 0.0
+			mole.stall_time = 0.0
+			mole.rest = rng.randf_range(0.18, 0.45)
 	ripple_delay -= dt
 	if mole_wet and mole.speed > 0.0 and ripple_delay <= 0.0:
 		ripple.call(bed_position)
@@ -206,14 +329,12 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 	if held != mole and encounter_pause <= 0.0 and (mole.position.is_equal_approx(mole.target) or mole.speed == 0.0):
 		mole.rest -= dt
 		if mole.rest <= 0.0:
-			var x := clampf(mole.position.x + rng.randf_range(-49.0, 49.0), 51.0, 238.0)
 			if runs_to_cross == 0:
 				bank_side = -bank_side
 				runs_to_cross = rng.randi_range(2, 4)
-				x = clampf(mole.position.x + rng.randf_range(-22.0, 22.0), 51.0, 238.0)
 			else:
 				runs_to_cross -= 1
-			mole.target = project.call(Vector2(x, bank_side * rng.randf_range(53.0, 69.0)))
+			mole.target = pick_mole_target(project)
 			mole.rest = rng.randf_range(0.45, 2.15)
 
 	var mantis_wet: bool = wet.call(unproject.call(mantis.position))
@@ -226,12 +347,18 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 	else:
 		var boundary := ROAM_AREA if mantis_wet or not mantis_patch.has_point(mantis.position) else mantis_patch
 		walk(mantis, mole, dt, 9.0 if mantis_wet else 3.25, boundary)
+		if mantis.stall_time >= 2.2:
+			mantis.target = mantis.position
+			mantis.speed = 0.0
+			mantis.avoid_side = 0.0
+			mantis.stall_time = 0.0
+			mantis.rest = rng.randf_range(0.4, 1.1)
 	if held != mantis and mantis_alert <= 0.54 and (mantis.position.is_equal_approx(mantis.target) or mantis.speed == 0.0):
 		mantis.rest -= dt
 		if mantis.rest <= 0.0:
 			var point := mantis.position + Vector2(rng.randf_range(-11.0, 11.0), rng.randf_range(-5.5, 5.5))
 			var candidate := point.clamp(mantis_patch.position, mantis_patch.end - Vector2.ONE * 0.5)
-			if not wet.call(unproject.call(candidate)) and blocking_rock(mantis, candidate, candidate) == null:
+			if not wet.call(unproject.call(candidate)) and point_clear(mantis, candidate, mole, ROAM_AREA):
 				mantis.target = candidate
 			mantis.rest = rng.randf_range(0.9, 3.2)
 

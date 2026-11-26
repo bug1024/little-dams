@@ -6,6 +6,7 @@ render_mode unshaded;
 uniform vec4 canopy_flutter;
 uniform float rain_wetness;
 uniform float rain_intensity;
+uniform vec3 hearth_light = vec3(0.73125, 0.77, 0.0);
 uniform bool independent_prop = false;
 uniform vec4 prop_region = vec4(0.0, 0.0, 1.0, 1.0);
 uniform vec2 prop_sway = vec2(0.0);
@@ -85,12 +86,14 @@ void fragment() {
 			art = tip;
 		}
 	}
-	// The forest recedes away from the creek while the interactive layer stays crisp.
+	// Keep darks rich and frame the creek with a cool forest canopy vignette instead of hazy gray.
 	float distance_to_creek = abs(p.y - (0.55 - p.x * 0.17));
-	float far_bank = smoothstep(0.18, 0.48, distance_to_creek);
+	float far_bank = smoothstep(0.22, 0.52, distance_to_creek);
+	float corner_shade = smoothstep(0.42, 0.96, length((p - vec2(0.52, 0.50)) * vec2(1.05, 1.15)));
+	float frame_shade = clamp(far_bank * 0.55 + corner_shade * 0.45, 0.0, 1.0);
 	float luma = dot(art, vec3(0.26, 0.63, 0.11));
-	art = mix(art, vec3(luma) * vec3(0.94, 0.98, 1.02), far_bank * 0.24);
-	art = mix(art, (art - 0.44) * 0.79 + 0.42, far_bank * 0.66);
+	art = mix(art, vec3(luma) * vec3(0.92, 0.97, 0.99), far_bank * 0.10);
+	art *= mix(vec3(1.0), vec3(0.84, 0.88, 0.87), frame_shade * 0.52);
 
 	vec2 pixel = floor(p / texel);
 	float patches = earth_patch(pixel / vec2(34.0, 13.0));
@@ -125,8 +128,8 @@ void fragment() {
 	float value = dot(land, vec3(0.26, 0.63, 0.11));
 	float ochre = smoothstep(0.055, 0.24, land.r - land.b) * smoothstep(0.27, 0.67, value);
 	float foliage = smoothstep(0.035, 0.19, land.g - land.b) * smoothstep(-0.04, 0.065, land.g - land.r);
-	land = mix(land, value * vec3(1.07, 1.005, 0.91), 0.18 + max(ochre * 0.40, foliage * 0.37));
-	land -= smoothstep(0.48, 0.78, value) * vec3(0.072, 0.052, 0.030);
+	land = mix(land, value * vec3(1.07, 1.005, 0.91), 0.07 + max(ochre * 0.16, foliage * 0.14));
+	land -= smoothstep(0.56, 0.86, value) * vec3(0.048, 0.034, 0.018);
 	float sunlit = sunlight_at(p) * smoothstep(0.26, 0.58, value) * (0.73 + patches * 0.27);
 	land += vec3(0.081, 0.071, 0.054) * sunlit * (1.0 - rain_intensity * 0.82);
 	float leaf_shade = cast_leaf_shade(p, texel) * smoothstep(0.30, 0.58, value);
@@ -134,5 +137,15 @@ void fragment() {
 	float soaked = rain_wetness * (0.66 + patches * 0.34);
 	land *= mix(vec3(1.0), vec3(0.74, 0.81, 0.89), soaked);
 	land += vec3(0.046, 0.062, 0.059) * soaked * green * smoothstep(0.47, 0.68, value);
+	if (hearth_light.z > 0.005) {
+		vec2 fire_offset = (p - hearth_light.xy) / vec2(0.145, 0.165);
+		float fire_falloff = pow(max(0.0, 1.0 - length(fire_offset)), 2.1);
+		float glow_grain = 0.86 + 0.28 * earth_patch(pixel / 3.5);
+		float glow = fire_falloff * hearth_light.z * glow_grain * (0.72 + rain_wetness * 0.38);
+		land += vec3(0.24, 0.115, 0.032) * glow * (0.45 + 0.55 * smoothstep(0.08, 0.52, value));
+		land = mix(land, land * vec3(1.14, 0.99, 0.86), min(0.65, glow * 0.75));
+	}
+	float mist = rain_intensity * (0.10 * (1.0 - p.y) + 0.035);
+	land = mix(land, vec3(0.58, 0.66, 0.69), mist);
 	COLOR = vec4(land, independent_prop ? silhouette : 1.0);
 }

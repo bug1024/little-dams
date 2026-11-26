@@ -36,6 +36,8 @@ func run() -> void:
 	check_insect_drag()
 	check_cicada()
 	check_frog_and_loach()
+	check_mole_anti_stuck()
+	check_crab()
 	game.free()
 	quit(failures)
 
@@ -617,3 +619,94 @@ func check_frog_and_loach() -> void:
 		"The loach can be moved to another part of the creek")
 	frames(30)
 	expect(view.summer.fish.distance_to(move_to) > 2.0, "The released loach resumes swimming")
+
+func check_mole_anti_stuck() -> void:
+	game.restart()
+	var view := game.scene
+	var insects := view.ground_insects
+	view.bank.clear()
+	# Build a concave V-pocket of rocks around the mole's direct path and place its target inside a boulder.
+	var pocket := [Vector2(142, 168), Vector2(148, 180), Vector2(138, 184)]
+	for at: Vector2 in pocket:
+		view.bank.append(Materials.Piece.new(view.from_screen(at), 12.0, Materials.STONE, 0))
+	view.refresh_insect_terrain()
+	insects.mole.position = Vector2(124, 176)
+	insects.mole.target = Vector2(142, 168)
+	insects.mole.rest = 0.0
+	var flips := 0
+	var prev_heading := insects.mole.heading
+	var crossed := false
+	for i in 240:
+		insects.advance(1.0 / 60.0, view.to_screen, view.from_screen, view.insect_in_water, view.insect_ripple)
+		if prev_heading.dot(insects.mole.heading) < -0.5:
+			flips += 1
+		prev_heading = insects.mole.heading
+		if insects.blocking_rock(insects.mole, insects.mole.position, insects.mole.position) != null:
+			crossed = true
+	var escaped_blocked_target := not insects.mole.target.is_equal_approx(Vector2(142, 168))
+	expect(escaped_blocked_target and flips < 6 and not crossed and insects.mole.position.is_finite(),
+		"The mole cricket abandons unreachable pocket targets without spinning in place (flips %d)" % flips)
+
+	# Drop a stone directly on the mole's exact position and verify it walks out cleanly.
+	var cover := Materials.Piece.new(view.from_screen(insects.mole.position), 11.0, Materials.STONE, 0)
+	view.bank.append(cover)
+	view.refresh_insect_terrain()
+	var start_pos := insects.mole.position
+	for i in 120:
+		insects.advance(1.0 / 60.0, view.to_screen, view.from_screen, view.insect_in_water, view.insect_ripple)
+	expect(insects.mole.position.is_finite() and insects.mole.position.distance_to(start_pos) > 3.0,
+		"A mole covered by a stone escapes smoothly without freezing")
+	game.restart()
+
+func check_crab() -> void:
+	game.restart()
+	var view := game.scene
+	var crab := view.crab
+	var home := crab.position
+	expect(home.is_finite() and not crab.held and view.insect_in_water(view.from_screen(home)),
+		"The creek crab starts calmly inside the water")
+
+	# Stays in the water over time without wandering onto the dry bank.
+	view.pointer = Vector2.ZERO
+	var stayed_in_water := true
+	for i in 240:
+		view.advance(1.0 / 60.0)
+		if not view.insect_in_water(view.from_screen(crab.position)):
+			stayed_in_water = false
+	expect(stayed_in_water and crab.position.distance_to(home) < 18.0,
+		"The crab stays calmly inside the creek without wandering around")
+
+	# Move pointer near the crab to trigger its defensive pincer pose.
+	view.pointer = crab.position + Vector2(10.0, -4.0)
+	for i in 30:
+		view.advance(1.0 / 60.0)
+	expect(crab.alert > 0.5 and crab.snip > 0.0, "Approaching the crab makes it raise and snap its pincers")
+
+	# Grab, drag and drop the crab onto the dry bank -> it crawls back into the water!
+	view.pointer = Vector2.ZERO
+	pointer_button(crab.position, true)
+	var grabbed := crab.held and view.holding_animal()
+	var dry_spot := Vector2(150.0, 174.0)
+	pointer_button(dry_spot, false)
+	var landed_on_bank := grabbed and not crab.held and crab.position.is_equal_approx(dry_spot) and not crab.wet
+	for i in 300:
+		view.advance(1.0 / 60.0)
+	expect(landed_on_bank and crab.wet and view.insect_in_water(view.from_screen(crab.position)),
+		"A crab placed on the dry bank crawls back into the creek")
+
+	# Grab and drop into water makes a ripple, and cannot drop directly on the frog.
+	view.ripples.clear()
+	pointer_button(crab.position, true)
+	var creek_spot := view.to_screen(Vector2(162, 4))
+	pointer_button(creek_spot, false)
+	expect(not crab.held and crab.position.is_equal_approx(creek_spot) and not view.ripples.is_empty(),
+		"Dropping the crab into the creek makes a water splash and ripple")
+
+	var before := crab.position
+	pointer_button(crab.position, true)
+	pointer_button(view.frog.position, false)
+	expect(not crab.held and crab.position.is_equal_approx(before),
+		"The crab cannot be dropped on top of another animal")
+
+	game.restart()
+	expect(crab.position.is_equal_approx(home), "Restart returns the crab to its creek home")

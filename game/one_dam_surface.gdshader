@@ -157,5 +157,7 @@ void fragment() {
 	// A moving film can still trace the pebbles below a nearly drained dam.
 	float trickle = smoothstep(0.009, 0.072, depth) * smoothstep(0.018, 0.14, speed) * (1.0 - shelf * 0.75);
 	cover = mix(cover, 1.0, trickle * 0.45);
-	COLOR = vec4(afternoon_light(mix(mix(gravel, damp_gravel, damp), water, cover), art_uv, max(cover, damp * 0.59)), channel.r);
+	vec3 final_surface = afternoon_light(mix(mix(gravel, damp_gravel, damp), water, cover), art_uv, max(cover, damp * 0.59));
+	final_surface = mix(final_surface, vec3(0.58, 0.66, 0.69), rain_intensity * (0.08 * (1.0 - art_uv.y) + 0.03));
+	COLOR = vec4(final_surface, channel.r);
 }
