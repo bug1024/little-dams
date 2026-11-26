@@ -60,6 +60,46 @@ static func quiet_rain() -> AudioStreamWAV:
 	stream.loop_end = FRAMES
 	return stream
 
+static func hearth_fire() -> AudioStreamWAV:
+	const RATE := 22050
+	const FRAMES := RATE * 5
+	const FADE := 4000
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7103
+	var buffer := PackedFloat32Array()
+	buffer.resize(FRAMES + FADE)
+	var rumble := 0.0
+	var warm := 0.0
+	var snap_amp := 0.0
+	var snap_phase := 0.0
+	var snap_freq := 1400.0
+	for i in buffer.size():
+		var white := rng.randf_range(-1.0, 1.0)
+		rumble += (white - rumble) * 0.032
+		warm += (rumble - warm) * 0.015
+		if rng.randf() < 0.00075:
+			snap_amp = rng.randf_range(0.18, 0.55)
+			snap_phase = 0.0
+			snap_freq = rng.randf_range(950.0, 2900.0)
+		snap_phase += TAU * snap_freq / RATE
+		snap_amp *= 0.986
+		var crackle := (sin(snap_phase) * 0.55 + white * 0.45) * snap_amp
+		buffer[i] = (rumble - warm * 0.45) * 1.45 + crackle * 0.65
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	for i in FRAMES:
+		var value := buffer[i]
+		if i < FADE:
+			value = lerpf(buffer[FRAMES + i], value, smoothstep(0.0, 1.0, float(i) / FADE))
+		samples.encode_s16(i * 2, clampi(roundi(value * 24000.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_end = FRAMES
+	return stream
+
 static func water_cue(cue: Cue) -> AudioStreamWAV:
 	var rate := 22050
 	var duration: float = [0.43, 1.65, 0.32][cue]

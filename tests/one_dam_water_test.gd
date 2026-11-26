@@ -38,6 +38,7 @@ func run() -> void:
 	check_frog_and_loach()
 	check_mole_anti_stuck()
 	check_crab()
+	check_music_cycle()
 	game.free()
 	quit(failures)
 
@@ -710,3 +711,54 @@ func check_crab() -> void:
 
 	game.restart()
 	expect(crab.position.is_equal_approx(home), "Restart returns the crab to its creek home")
+
+func check_music_cycle() -> void:
+	var director := game.music_director
+	director.reset_cycle()
+	director.set_enabled(true)
+	expect(director.state == director.State.INTRO_WAIT and director.current_gain_db <= -59.0,
+		"Music starts with a brief breath of pure creek sound")
+
+	# Advance past intro delay + fade-in.
+	for i in 40:
+		director.advance(0.1, 0.0, 0.0)
+	var sunny_db := director.current_gain_db
+	expect(director.state == director.State.PLAYING and director.track_index == 0 and absf(sunny_db - (-20.0)) < 0.5,
+		"First section fades in at its calibrated gain (%.1f dB)" % sunny_db)
+
+	# Rain softens cutoff and ducks level; flood surge ducks further.
+	for i in 30:
+		director.advance(0.1, 1.0, 0.0)
+	var rain_db := director.current_gain_db
+	var rain_cutoff := director.filter_cutoff_hz
+	for i in 12:
+		director.advance(0.1, 1.0, 1.0)
+	var surge_db := director.current_gain_db
+	expect(rain_cutoff < 3000.0 and rain_db < sunny_db - 2.5 and surge_db < rain_db - 2.0,
+		"Rain low-pass filters music (%.0f Hz) and flood surge gently ducks volume" % rain_cutoff)
+
+	# Let the section play to completion -> enters breathing silence and advances to track 1.
+	for i in 520:
+		director.advance(0.1, 0.0, 0.0)
+		if director.state == director.State.SILENCE:
+			break
+	expect(director.state == director.State.SILENCE and director.track_index == 1 and director.silence_left >= 22.0 and director.current_gain_db <= -59.0,
+		"After finishing a section, music enters a 22-38s natural silence break (%.1fs)" % director.silence_left)
+
+	# Waiting out the silence starts the second track at its loudness-matched gain (-12 dB).
+	var wait_steps := ceili(director.silence_left / 0.1) + 35
+	for i in wait_steps:
+		director.advance(0.1, 0.0, 0.0)
+	expect(director.state == director.State.PLAYING and director.track_index == 1 and absf(director.current_gain_db - (-12.0)) < 0.6,
+		"Next section fades in after silence at matched loudness (%.1f dB)" % director.current_gain_db)
+
+	# Muting silences music, and unmuting during a silence break promptly resumes.
+	director.state = director.State.SILENCE
+	director.silence_left = 30.0
+	director.set_enabled(false)
+	director.advance(0.5, 0.0, 0.0)
+	director.set_enabled(true)
+	for i in 15:
+		director.advance(0.1, 0.0, 0.0)
+	expect(director.state == director.State.PLAYING and director.current_gain_db > -55.0,
+		"Re-enabling music during a silence break promptly fades the next section in")

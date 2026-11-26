@@ -6,6 +6,7 @@ const Breach = preload("res://game/one_dam_breach.gd")
 const View = preload("res://game/one_dam_view.gd")
 const Controls = preload("res://game/one_dam_controls.gd")
 const WaterAudio = preload("res://game/one_dam_water_audio.gd")
+const MusicDirector = preload("res://game/one_dam_music.gd")
 const PIXELS := Vector2i(640, 400)
 const SCALE := 4.0
 const DETAIL := 2.0
@@ -31,6 +32,7 @@ var music_button := Button.new()
 var hud_actions: HBoxContainer
 var hud_idle := 0.0
 var controls_art := Controls.new()
+var music_director := MusicDirector.new()
 var music_enabled := true
 var creek: AudioStreamPlayer
 var music: AudioStreamPlayer
@@ -40,6 +42,7 @@ var water_crest: AudioStreamPlayer
 var stone_splash: AudioStreamPlayer
 var rain_audio: AudioStreamPlayer
 var frog_audio: AudioStreamPlayer
+var hearth_audio: AudioStreamPlayer
 var held: Pool.Piece
 var held_floater: View.Floater
 var held_pipe: Pool.DrainPipe
@@ -82,7 +85,7 @@ func _ready() -> void:
 
 	build_controls()
 	creek = audio("res://game/one_dam_audio/shallows.wav", -2.0, true)
-	music = audio("res://game/one_dam_audio/summer_memory_8bit.wav", -60.0, true)
+	music = music_director.setup(self, can_play_audio())
 	audio("res://game/one_dam_audio/july_bank.wav", -12.5, true)
 	clack = audio("res://game/drop.wav", -16.0)
 	if can_play_audio():
@@ -98,6 +101,10 @@ func _ready() -> void:
 		frog_audio.volume_db = -22.0
 		add_child(frog_audio)
 		scene.frog.croaked.connect(frog_audio.play)
+		hearth_audio = AudioStreamPlayer.new()
+		hearth_audio.stream = WaterAudio.hearth_fire()
+		hearth_audio.volume_db = -60.0
+		add_child(hearth_audio)
 	model.released.connect(on_released.bind(false))
 	lower.released.connect(on_released.bind(true))
 	model.landed.connect(scene.support_impact)
@@ -173,7 +180,7 @@ func build_controls() -> void:
 func toggle_music() -> void:
 	hud_idle = 0.0
 	music_enabled = not music_enabled
-	music.stream_paused = not music_enabled
+	music_director.set_enabled(music_enabled)
 	music_button.text = "音乐开" if music_enabled else "音乐关"
 	controls_art.set_music_enabled(music_button, music_enabled)
 
@@ -206,6 +213,8 @@ func restart() -> void:
 		rain_audio.stop()
 	if frog_audio != null:
 		frog_audio.stop()
+	if hearth_audio != null:
+		hearth_audio.stop()
 	upper_breach.reset()
 	lower_breach.reset()
 	cancel_grab()
@@ -269,8 +278,10 @@ func _process(delta: float) -> void:
 	update_grab(pointer)
 	update_hover(pointer)
 	gate.disabled = model.wall.is_empty() and lower.wall.is_empty()
-	var fade := maxf(0.001, smoothstep(0.0, 1.3, scene.clock))
-	music.volume_db = -20.0 + linear_to_db(fade)
+	var flood_surge := maxf(maxf(scene.surge_at(155.0), scene.surge_at(187.0)), scene.surge_at(225.0))
+	var breach_active := upper_breach.strength if upper_breach.phase in [Breach.Phase.JET, Breach.Phase.SURGE] else 0.0
+	breach_active = maxf(breach_active, lower_breach.strength if lower_breach.phase in [Breach.Phase.JET, Breach.Phase.SURGE] else 0.0)
+	music_director.advance(delta, scene.rain.intensity, clampf(maxf(flood_surge, breach_active), 0.0, 1.0))
 	var current := maxf(water.discharge_at(151.0), water.discharge_at(249.0))
 	var creek_level := lerpf(-6.0, -3.5, smoothstep(0.35, 2.5, current))
 	creek.volume_db = lerpf(creek.volume_db, creek_level, 1.0 - exp(-delta * 0.75))
@@ -283,6 +294,14 @@ func _process(delta: float) -> void:
 		rain_audio.volume_db = -27.0 + linear_to_db(maxf(0.001, scene.rain.intensity))
 		if not scene.rain.enabled and scene.rain.intensity <= 0.0:
 			rain_audio.stop()
+	if hearth_audio != null:
+		if scene.hearth.firelight > 0.02:
+			if not hearth_audio.playing:
+				hearth_audio.volume_db = -60.0
+				hearth_audio.play()
+			hearth_audio.volume_db = -24.0 + linear_to_db(clampf(scene.hearth.firelight, 0.001, 1.0))
+		elif hearth_audio.playing:
+			hearth_audio.stop()
 
 func update_hover(pointer: Vector2) -> void:
 	scene.hovered = null
