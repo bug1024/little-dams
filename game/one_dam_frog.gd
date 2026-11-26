@@ -39,7 +39,10 @@ func place(at: Vector2) -> void:
 	pause = 0.48
 	held = false
 
-func advance(dt: float, clear: Callable) -> void:
+func nudge_call(max_delay := 2.2) -> void:
+	call_due = minf(call_due, max_delay)
+
+func advance(dt: float, clear: Callable, activity := 0.0, twilight := 0.0) -> void:
 	if held:
 		return
 	throat = move_toward(throat, 0.0, dt * 2.9)
@@ -67,7 +70,8 @@ func advance(dt: float, clear: Callable) -> void:
 	if call_due <= 0.0:
 		throat = 1.0
 		croaked.emit()
-		call_due = rng.randf_range(6.0, 14.0)
+		var pace := clampf(activity, 0.0, 1.0)
+		call_due = rng.randf_range(lerpf(6.0, 3.8, pace), lerpf(14.0, 8.8, pace))
 		pause = maxf(pause, 0.42)
 	pause -= dt
 	if pause > 0.0:
@@ -82,7 +86,8 @@ func advance(dt: float, clear: Callable) -> void:
 			age = 0.0
 			duration = rng.randf_range(0.30, 0.44)
 			break
-	pause = rng.randf_range(0.9, 3.9)
+	var calm := clampf(twilight, 0.0, 1.0)
+	pause = rng.randf_range(lerpf(0.9, 5.5, calm), lerpf(3.9, 13.5, calm))
 
 func hop_height() -> float:
 	return sin(clampf(age / duration, 0.0, 1.0) * PI) if duration > 0.0 else 0.0

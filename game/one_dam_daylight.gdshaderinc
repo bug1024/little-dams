@@ -1,5 +1,15 @@
 uniform vec4 wind_trail = vec4(0.16);
 uniform vec3 sun_drift = vec3(0.0, 0.0, 0.48);
+uniform float day_phase = 0.0;
+
+float dusk_weight() {
+	float p = clamp(day_phase, 0.0, 2.0);
+	return smoothstep(0.0, 1.0, p) * (1.0 - smoothstep(1.0, 2.0, p));
+}
+
+float twilight_weight() {
+	return smoothstep(0.85, 2.0, clamp(day_phase, 0.0, 2.0));
+}
 
 float earth_patch(vec2 p) {
 	vec2 tile = floor(p);
@@ -39,8 +49,20 @@ float canopy_cover(vec2 p) {
 vec3 afternoon_light(vec3 color, vec2 p, float wet) {
 	float sun = smoothstep(0.18, 0.77, p.x + (1.0 - p.y) * 0.34);
 	float luma = dot(color, vec3(0.24, 0.63, 0.13));
+	float dusk = dusk_weight();
+	float twi = twilight_weight();
 	vec3 warm = color * vec3(1.018, 1.00, 0.974) + vec3(0.012, 0.007, 0.0) * luma;
 	vec3 cool = color * vec3(0.94, 0.975, 1.025);
 	vec3 result = mix(cool, warm, sun);
-	return mix(result, color, wet * 0.42);
+	result = mix(result, color, wet * 0.42);
+	if (dusk > 0.001) {
+		vec3 sunset_warm = result * vec3(1.13, 0.90, 0.70) + vec3(0.052, 0.020, 0.0) * luma;
+		vec3 sunset_cool = result * vec3(0.83, 0.80, 0.94);
+		result = mix(result, mix(sunset_cool, sunset_warm, sun), dusk);
+	}
+	if (twi > 0.001) {
+		vec3 blue_hour = result * vec3(0.56, 0.67, 0.88) + vec3(0.016, 0.032, 0.070) * (1.0 - luma * 0.7);
+		result = mix(result, blue_hour, twi);
+	}
+	return result;
 }

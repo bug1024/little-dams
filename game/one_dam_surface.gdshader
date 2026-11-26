@@ -15,6 +15,7 @@ uniform float bed_refraction : hint_range(0.0, 1.0) = 1.0;
 uniform float bank_foam : hint_range(0.0, 1.0) = 1.0;
 uniform vec4 wind_travel;
 uniform float rain_intensity;
+uniform vec3 hearth_light = vec3(0.73125, 0.77, 0.0);
 const vec2 WIND = vec2(0.94, 0.34);
 
 float backed_water(float x, vec2 pond) {
@@ -111,20 +112,26 @@ void fragment() {
 	water = mix(water, vec3(0.23, 0.27, 0.17), algae * 0.19);
 	water = mix(water, sediment, min(0.87, silt * (1.0 - deep * 0.87) * 0.39 + state.a * 0.69));
 
+	float dusk = dusk_weight();
+	float twi = twilight_weight();
 	float breeze = wind_at(art_uv.x);
 	float lit = 1.0 - shade * 0.65;
 	float sun = lit * smoothstep(0.35, 0.9, art_uv.x + art_uv.y * 0.52) * (0.61 + sunlight_at(art_uv) * 0.59);
 	sun *= 1.0 - rain_intensity * 0.73;
 	float glint = step(0.93, sin(pixel.x * 0.123 - creek_time * 1.6 + sin(pixel.y * 0.29)));
 	glint *= smoothstep(0.47, 0.72, earth_patch(pixel / vec2(11.0, 3.5) - shore.gb * 0.025));
-	water = mix(water, vec3(0.83, 0.88, 0.80), glint * sun * (1.0 - deep * 0.76) * (0.26 + breeze * 0.12));
+	vec3 glint_col = mix(vec3(0.83, 0.88, 0.80), vec3(0.98, 0.74, 0.46), dusk);
+	glint_col = mix(glint_col, vec3(0.66, 0.80, 0.94), twi);
+	water = mix(water, glint_col, glint * sun * (1.0 - deep * 0.76) * (0.26 + breeze * 0.12 + dusk * 0.14));
 
 	// Gusts roughen patches of the surface that drift downwind and sparkle where the sun reaches.
 	vec2 drift = motion - WIND * downwind_sample(wind_travel, art_uv.x);
 	float paws = smoothstep(0.43, 0.68, earth_patch(drift / vec2(44.0, 23.0))) * smoothstep(0.27, 0.83, breeze);
 	float chop = smoothstep(0.71, 0.90, earth_patch(drift / vec2(4.6, 1.4)));
 	water = mix(water, water * vec3(0.95, 0.98, 1.02) + vec3(0.0, 0.01, 0.02), paws * 0.30);
-	water = mix(water, vec3(0.72, 0.82, 0.79), chop * paws * (0.055 + sun * 0.27));
+	vec3 chop_col = mix(vec3(0.72, 0.82, 0.79), vec3(0.93, 0.72, 0.52), dusk * 0.85);
+	chop_col = mix(chop_col, vec3(0.56, 0.70, 0.86), twi);
+	water = mix(water, chop_col, chop * paws * (0.055 + sun * 0.27));
 
 	float bend = sin(motion.y * 0.16) * 1.79 + sin(motion.x * 0.027 + motion.y * 0.061);
 	float ripple = step(0.959, sin(motion.x * 0.105 + bend));
@@ -158,6 +165,16 @@ void fragment() {
 	float trickle = smoothstep(0.009, 0.072, depth) * smoothstep(0.018, 0.14, speed) * (1.0 - shelf * 0.75);
 	cover = mix(cover, 1.0, trickle * 0.45);
 	vec3 final_surface = afternoon_light(mix(mix(gravel, damp_gravel, damp), water, cover), art_uv, max(cover, damp * 0.59));
-	final_surface = mix(final_surface, vec3(0.58, 0.66, 0.69), rain_intensity * (0.08 * (1.0 - art_uv.y) + 0.03));
+	if (hearth_light.z > 0.005) {
+		vec2 reflect_center = hearth_light.xy - vec2(0.03, 0.26);
+		vec2 reflect_off = (art_uv - reflect_center) / vec2(0.16, 0.18);
+		float reflect_falloff = pow(max(0.0, 1.0 - length(reflect_off)), 1.9);
+		float shimmer = 0.55 + 0.45 * sin(pixel.x * 0.19 - creek_time * 3.1 + sin(pixel.y * 0.42) * 1.4);
+		float fire_ref = reflect_falloff * cover * hearth_light.z * shimmer * (0.35 + dusk * 0.55 + twi * 1.15);
+		final_surface += vec3(0.32, 0.145, 0.038) * fire_ref;
+	}
+	vec3 water_mist = mix(vec3(0.58, 0.66, 0.69), vec3(0.62, 0.52, 0.50), dusk * 0.75);
+	water_mist = mix(water_mist, vec3(0.24, 0.32, 0.46), twi);
+	final_surface = mix(final_surface, water_mist, rain_intensity * (0.08 * (1.0 - art_uv.y) + 0.03));
 	COLOR = vec4(final_surface, channel.r);
 }

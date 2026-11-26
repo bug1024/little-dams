@@ -1,6 +1,6 @@
 extends RefCounted
 
-enum Action { RELEASE, RESTART, RAIN, MUSIC }
+enum Action { RELEASE, RESTART, RAIN, TIME, MUSIC }
 
 # Each character is drawn on the same pixel grid as the scene and cursor.
 const GLYPHS := {
@@ -74,17 +74,55 @@ const GLYPHS := {
 		"..#......#..", "..#######...", "..#...#.....", "..#....#....",
 		"..#.....#...", "..#......#..", "..#......#..", "............",
 	],
+	"T": [
+		"............", ".##########.", ".....##.....", ".....##.....",
+		".....##.....", ".....##.....", ".....##.....", ".....##.....",
+		".....##.....", ".....##.....", ".....##.....", "............",
+	],
+	"午": [
+		"...#........", "..#.........", ".##########.", "#....#......",
+		".....#......", "############", ".....#......", ".....#......",
+		".....#......", ".....#......", ".....#......", ".....#......",
+	],
+	"后": [
+		"......#####.", "..####......", "..#.........", "..##########",
+		"..#.........", "..#..######.", "..#..#....#.", "..#..#....#.",
+		".#...#....#.", ".#...######.", "#...........", "............",
+	],
+	"傍": [
+		"..#....##...", "..#.########", ".#....#..#..", ".##.########",
+		"#.#.#......#", "..#..######.", "..#....#....", "..#.########",
+		"..#...#..#..", "..#...#..#..", "..#..#...#..", "..#.#...##..",
+	],
+	"晚": [
+		".....#......", "###..#####..", "#.#.#....#..", "###..#####..",
+		"#.#..#.#.#..", "#.#..#####..", "###....#.#..", "#.#...#..#..",
+		"###..#...#.#", "....#....#.#", "...#.....###", "............",
+	],
+	"微": [
+		"..#..#..#...", ".#...#..####", "#..#.#.#.#..", "..#.###.#.#.",
+		".#......#.#.", "#.#.###..#..", "..#..#...#..", "..#.#.#.#.#.",
+		"..#.#.#.#.#.", "..#.#.##...#", "..#.#.......", "..#.........",
+	],
+	"暮": [
+		"...#....#...", ".##########.", "...######...", "...#....#...",
+		"...######...", "############", "..#......#..", ".#.######.#.",
+		"#..#....#..#", "...######...", "...#....#...", "...######...",
+	],
 }
 const RIPPLE := ["....#....", "...###...", "..#####..", "..#####..", "...###...", ".........", ".##...##.", "...###..."]
 const RETURN := ["..#......", ".##.###..", "###....#.", ".##.....#", "..#.....#", "........#", ".#.....#.", "..#####.."]
 const CLOUD := ["...###...", "..#...#..", ".#.....#.", "#########", ".........", ".#..#..#.", "#..#..#..", "........."]
+const SUN := ["....#....", ".#..#..#.", "..#####..", "##.###.##", "..#####..", ".#..#..#.", "....#....", "........."]
+const SUNSET := ["....#....", ".#.....#.", "..#####..", ".#######.", "#########", ".........", ".#######.", "..#####.."]
+const MOON := ["...###...", ".####....", "####.....", "####.....", "####.....", ".####..#.", "..######.", "....##..."]
 const NOTE := [".....###.", ".....#..#", ".....#...", ".....#...", ".....#...", "..####...", ".#####...", "..###...."]
 const NOTE_OFF := ["#....###.", ".#...#..#", "..#..#...", "...#.#...", "....##...", "..##.#...", ".####..#.", "..###..#."]
 const UNIT := 2
 const FONT_SIZE := 24
 const CELL := FONT_SIZE + UNIT
 const BUTTON_HEIGHT := 48
-const BUTTON_WIDTHS := [118, 110, 118, 148]
+const BUTTON_WIDTHS := [118, 110, 118, 118, 148]
 
 var lettering := make_lettering()
 
@@ -127,6 +165,18 @@ func set_rain_active(button: Button, active: bool) -> void:
 		apply_plaque_theme(button, width, Color("#574a3b"))
 		button.icon = make_icon(Action.RAIN, false, false)
 
+func set_time_stage(button: Button, stage: int) -> void:
+	var width: int = BUTTON_WIDTHS[Action.TIME]
+	var clamped := clampi(stage, 0, 2)
+	button.text = ["午后", "傍晚", "微暮"][clamped]
+	if clamped == 1:
+		apply_plaque_theme(button, width, Color("#5c4333"), Color("#d99252"))
+	elif clamped == 2:
+		apply_plaque_theme(button, width, Color("#3b4354"), Color("#7e9cc4"))
+	else:
+		apply_plaque_theme(button, width, Color("#574a3b"))
+	button.icon = make_time_icon(clamped)
+
 func set_music_enabled(button: Button, enabled: bool) -> void:
 	var width: int = BUTTON_WIDTHS[Action.MUSIC]
 	if enabled:
@@ -158,11 +208,21 @@ func make_lettering() -> FontFile:
 	return font
 
 func make_icon(variant: Action, muted := false, active := false) -> ImageTexture:
+	if variant == Action.TIME:
+		return make_time_icon(0)
 	var bitmap := Image.create_empty(20, 20, false, Image.FORMAT_RGBA8)
-	var pattern: Array = [RIPPLE, RETURN, CLOUD, NOTE_OFF if muted else NOTE][variant]
+	var pattern: Array = [RIPPLE, RETURN, CLOUD, SUN, NOTE_OFF if muted else NOTE][variant]
 	var tint: Color = [Color("#9ed6c1"), Color("#ddba83"),
 		Color("#c4f0f5") if active else Color("#b7cfd4"),
+		Color("#f2ce78"),
 		Color("#958e7c") if muted else Color("#e1c79b")][variant]
+	ink(bitmap, pattern, Vector2i(0, UNIT), UNIT, tint)
+	return ImageTexture.create_from_image(bitmap)
+
+func make_time_icon(stage: int) -> ImageTexture:
+	var bitmap := Image.create_empty(20, 20, false, Image.FORMAT_RGBA8)
+	var pattern: Array = [SUN, SUNSET, MOON][clampi(stage, 0, 2)]
+	var tint: Color = [Color("#f2ce78"), Color("#f2a866"), Color("#c9ddf5")][clampi(stage, 0, 2)]
 	ink(bitmap, pattern, Vector2i(0, UNIT), UNIT, tint)
 	return ImageTexture.create_from_image(bitmap)
 

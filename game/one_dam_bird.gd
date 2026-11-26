@@ -78,10 +78,13 @@ func reset() -> void:
 func is_airborne() -> bool:
 	return state == State.APPROACHING or state == State.DEPARTING
 
-func is_clear_perch(pt: Vector2, pointer: Vector2, pointer_inside: bool, rocks: Array, spot_wet: Callable, min_pointer_dist: float) -> bool:
+func is_clear_perch(pt: Vector2, pointer: Vector2, pointer_inside: bool, rocks: Array, spot_wet: Callable,
+		min_pointer_dist: float, hearth_pos := Vector2.INF, hearth_lit := false) -> bool:
 	if not Rect2(Vector2(10.0, 10.0), SIZE - Vector2(20.0, 20.0)).has_point(pt):
 		return false
-	if pt.x > 165.0 and pt.y > 162.0:
+	if pt.x > 142.0 and pt.y > 162.0:
+		return false
+	if hearth_lit and hearth_pos.is_finite() and pt.distance_to(hearth_pos) < 58.0:
 		return false
 	if pointer_inside and pt.distance_to(pointer) < min_pointer_dist:
 		return false
@@ -94,7 +97,9 @@ func is_clear_perch(pt: Vector2, pointer: Vector2, pointer_inside: bool, rocks: 
 			return false
 	return true
 
-func advance(dt: float, pointer: Vector2, rain_intensity: float, rocks: Array, spot_wet: Callable) -> void:
+func advance(dt: float, pointer: Vector2, rain_intensity: float, rocks: Array, spot_wet: Callable,
+		day_phase := 0.0, after_rain := 0.0, puddle_spots: Array[Vector2] = [],
+		hearth_pos := Vector2.INF, hearth_lit := false) -> void:
 	if dt <= 0.0:
 		return
 	clock += dt
@@ -104,27 +109,40 @@ func advance(dt: float, pointer: Vector2, rain_intensity: float, rocks: Array, s
 	if pointer_inside and prev_pointer.is_finite():
 		pointer_speed = pointer.distance_to(prev_pointer) / maxf(dt, 0.001)
 	prev_pointer = pointer if pointer_inside else Vector2.INF
+	var roosting := day_phase > 1.55
 
 	match state:
 		State.AWAY:
-			if rain_intensity > 0.30:
+			if rain_intensity > 0.30 or roosting:
 				return
+			if after_rain > 0.25 and rain_intensity < 0.12 and away_due > 3.8:
+				away_due = 3.8
 			away_due -= dt
 			if away_due > 0.0:
 				return
-			var candidates: Array[int] = []
-			for i in ROADSIDE_PERCHES.size():
-				var pt: Vector2 = ROADSIDE_PERCHES[i]
-				if is_clear_perch(pt, pointer, pointer_inside, rocks, spot_wet, 44.0):
-					candidates.append(i)
-			if candidates.is_empty():
-				away_due = 3.0
-				return
-			if candidates.size() > 1 and last_perch_index >= 0:
-				candidates.erase(last_perch_index)
-			var pick: int = candidates[rng.randi_range(0, candidates.size() - 1)]
-			last_perch_index = pick
-			var perch: Vector2 = ROADSIDE_PERCHES[pick]
+			var perch := Vector2.INF
+			# After a rain shower, prefer landing beside a gleaming wet roadside puddle.
+			if after_rain > 0.20 and not puddle_spots.is_empty():
+				var puddle_picks: Array[Vector2] = []
+				for spot: Vector2 in puddle_spots:
+					if is_clear_perch(spot, pointer, pointer_inside, rocks, spot_wet, 44.0, hearth_pos, hearth_lit):
+						puddle_picks.append(spot)
+				if not puddle_picks.is_empty():
+					perch = puddle_picks[rng.randi_range(0, puddle_picks.size() - 1)]
+			if not perch.is_finite():
+				var candidates: Array[int] = []
+				for i in ROADSIDE_PERCHES.size():
+					var pt: Vector2 = ROADSIDE_PERCHES[i]
+					if is_clear_perch(pt, pointer, pointer_inside, rocks, spot_wet, 44.0, hearth_pos, hearth_lit):
+						candidates.append(i)
+				if candidates.is_empty():
+					away_due = 3.0
+					return
+				if candidates.size() > 1 and last_perch_index >= 0:
+					candidates.erase(last_perch_index)
+				var pick: int = candidates[rng.randi_range(0, candidates.size() - 1)]
+				last_perch_index = pick
+				perch = ROADSIDE_PERCHES[pick]
 			var from_left := perch.x > SIZE.x * 0.52 or (perch.x > 80.0 and rng.randf() < 0.5)
 			var entry_x := clampf(perch.x + ((-95.0 if from_left else 95.0) + rng.randf_range(-24.0, 24.0)), -26.0, SIZE.x + 26.0)
 			var entry_y := -16.0 if perch.y < SIZE.y * 0.5 else clampf(perch.y - rng.randf_range(44.0, 74.0), -14.0, SIZE.y + 12.0)
@@ -169,7 +187,7 @@ func advance(dt: float, pointer: Vector2, rain_intensity: float, rocks: Array, s
 				head_turn = 0.0
 
 		State.PERCHED:
-			if rain_intensity > 0.30:
+			if rain_intensity > 0.30 or roosting:
 				take_off(position + Vector2(0.0, 12.0), false)
 				return
 			if pointer_inside:
@@ -219,7 +237,7 @@ func advance(dt: float, pointer: Vector2, rain_intensity: float, rocks: Array, s
 					hop_due = rng.randf_range(2.2, 4.5)
 					for _try in 4:
 						var candidate := position + Vector2(facing * rng.randf_range(4.5, 9.5), rng.randf_range(-4.0, 4.0))
-						if candidate.distance_to(target_pos) <= 16.0 and is_clear_perch(candidate, pointer, pointer_inside, rocks, spot_wet, SPOOK_RADIUS + 4.0):
+						if candidate.distance_to(target_pos) <= 16.0 and is_clear_perch(candidate, pointer, pointer_inside, rocks, spot_wet, SPOOK_RADIUS + 4.0, hearth_pos, hearth_lit):
 							hop_origin = position
 							hop_target = candidate
 							hop_age = 0.0

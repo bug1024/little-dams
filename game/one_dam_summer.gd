@@ -15,6 +15,14 @@ const SEDGES := [
 
 enum Flight { PERCHED, FLYING, HOVERING, LANDING }
 
+class Fry:
+	var pos: Vector2
+	var heading := Vector2.LEFT
+	var phase := 0.0
+	var presence := 0.0
+	var turn_due := 0.6
+	var alarm := 0.0
+
 # The ends of three sedge stems are the insect's places to rest.
 const PERCHES := [0, 3, 5]
 const FISH_SHELTERS := [Vector2(61, 5), Vector2(83, -4), Vector2(111, 5),
@@ -39,6 +47,12 @@ var next_perch := 1
 var insect_position := Vector2(25.0, 113.0)
 var insect_held := false
 var temporary_perch := false
+var flower_perches: Array[Vector2] = []
+var perched_on_flower := false
+var flower_target := Vector2.ZERO
+var fry: Array[Fry] = []
+var pool_richness := 0.0
+var current_day_phase := 0.0
 var cicada_position := CICADA_PERCH
 var cicada_held := false
 var cicada_wet := false
@@ -57,12 +71,24 @@ var impulse_x := 0.0
 var rng := RandomNumberGenerator.new()
 var wind: Wind
 
-func advance(dt: float, water: Flow, rain_intensity := 0.0) -> void:
+func advance(dt: float, water: Flow, rain_intensity := 0.0, day_phase := 0.0, pool_richness_in := 0.0, after_rain := 0.0) -> void:
 	clock += dt
+	current_day_phase = day_phase
+	pool_richness = pool_richness_in
 	surface_impulse = move_toward(surface_impulse, 0.0, dt * 0.58)
 	advance_insect(dt)
-	advance_cicada(dt, rain_intensity)
+	advance_cicada(dt, rain_intensity, day_phase, after_rain)
 	advance_fish(dt, water)
+	advance_fry(dt, water)
+
+func reset_ecosystem() -> void:
+	fry.clear()
+	flower_perches.clear()
+	perched_on_flower = false
+	flower_target = Vector2.ZERO
+	pool_richness = 0.0
+	current_day_phase = 0.0
+	reset_cicada()
 
 func reset_cicada() -> void:
 	cicada_position = CICADA_PERCH
@@ -92,22 +118,24 @@ func place_cicada(point: Vector2, wet: bool) -> void:
 	cicada_call_due = rng.randf_range(4.5, 9.5)
 	cicada_twitch = 0.65
 
-func advance_cicada(dt: float, rain_intensity: float) -> void:
+func advance_cicada(dt: float, rain_intensity: float, day_phase := 0.0, after_rain := 0.0) -> void:
 	cicada_twitch = move_toward(cicada_twitch, 0.0, dt * 4.2)
 	if cicada_held:
 		cicada_singing = false
 		cicada_sing_level = move_toward(cicada_sing_level, 0.0, dt * 8.0)
 		return
-	cicada_twitch_due -= dt
-	if cicada_twitch_due <= 0.0:
-		cicada_twitch = rng.randf_range(0.45, 0.85)
-		cicada_twitch_due = rng.randf_range(4.5, 10.5)
-	var quiet_weather := rain_intensity > 0.25 or cicada_wet
+	var twilight_quiet := day_phase > 1.55
+	if not twilight_quiet:
+		cicada_twitch_due -= dt
+		if cicada_twitch_due <= 0.0:
+			cicada_twitch = rng.randf_range(0.45, 0.85)
+			cicada_twitch_due = rng.randf_range(4.5, 10.5)
+	var quiet_weather := rain_intensity > 0.25 or cicada_wet or twilight_quiet
 	if cicada_singing:
 		cicada_sing_age += dt
 		if quiet_weather or cicada_sing_age >= cicada_sing_duration:
 			cicada_singing = false
-			cicada_call_due = rng.randf_range(9.5, 20.0)
+			cicada_call_due = rng.randf_range(15.0, 28.0) if day_phase > 0.75 else rng.randf_range(9.5, 20.0)
 		else:
 			var attack := smoothstep(0.0, 0.72, cicada_sing_age)
 			var release := 1.0 - smoothstep(maxf(0.72, cicada_sing_duration - 1.15), cicada_sing_duration, cicada_sing_age)
@@ -116,6 +144,8 @@ func advance_cicada(dt: float, rain_intensity: float) -> void:
 	else:
 		cicada_sing_level = move_toward(cicada_sing_level, 0.0, dt * (5.0 if quiet_weather else 2.2))
 		if not quiet_weather:
+			if after_rain > 0.40 and rain_intensity < 0.18 and day_phase < 1.40 and cicada_call_due > 5.0:
+				cicada_call_due = 5.0
 			cicada_call_due -= dt
 			if cicada_call_due <= 0.0:
 				cicada_singing = true
@@ -135,6 +165,16 @@ func plant_tip(index: int, stem: int) -> Vector2:
 	var root: Vector3 = SEDGES[index]
 	return Vector2(root.x + (stem - 1.4) * 2.0 + plant_sway(index, stem), root.y - root.z * (0.73 + stem % 3 * 0.16))
 
+func live_flower_near(point: Vector2) -> Vector2:
+	var best := Vector2.INF
+	var best_d := 7.5
+	for spot: Vector2 in flower_perches:
+		var d := spot.distance_to(point)
+		if d < best_d:
+			best_d = d
+			best = spot
+	return best
+
 func advance_insect(dt: float) -> void:
 	if insect_held:
 		return
@@ -143,11 +183,20 @@ func advance_insect(dt: float) -> void:
 	var smooth := t * t * (3.0 - t * 2.0)
 	match insect_state:
 		Flight.PERCHED:
-			if not temporary_perch:
+			if perched_on_flower:
+				var live := live_flower_near(flower_target)
+				if live.is_finite():
+					flower_target = live
+					insect_position = live
+				else:
+					take_flight()
+					return
+			elif not temporary_perch:
 				insect_position = plant_tip(PERCHES[perch], 2)
 			var exposed := wind != null and wind.strength_at(insect_position.x / 320.0) > 0.73
 			var flooded := surface_impulse > 0.60 and absf(insect_position.x - impulse_x) < 37.0
-			if t >= 1.0 or (insect_age > 2.2 and (exposed or flooded)):
+			var twilight_rest := current_day_phase > 1.45 and not temporary_perch
+			if (not twilight_rest and t >= 1.0) or (insect_age > 2.2 and (exposed or flooded)):
 				take_flight()
 		Flight.FLYING:
 			insect_position = flight_origin.lerp(hover_point, smooth)
@@ -160,17 +209,36 @@ func advance_insect(dt: float) -> void:
 				flight_origin = insect_position
 				set_flight(Flight.LANDING, rng.randf_range(1.3, 2.8))
 		Flight.LANDING:
-			insect_position = flight_origin.lerp(plant_tip(PERCHES[next_perch], 2), smooth)
+			var dest := plant_tip(PERCHES[next_perch], 2)
+			if perched_on_flower:
+				var live := live_flower_near(flower_target)
+				if live.is_finite():
+					flower_target = live
+					dest = live
+				else:
+					perched_on_flower = false
+			insect_position = flight_origin.lerp(dest, smooth)
 			insect_position.y -= sin(t * PI) * 5.5
 			if t >= 1.0:
-				perch = next_perch
-				set_flight(Flight.PERCHED, rng.randf_range(6.5, 19.5))
+				if not perched_on_flower:
+					perch = next_perch
+				set_flight(Flight.PERCHED, rng.randf_range(5.5, 13.0) if perched_on_flower else rng.randf_range(6.5, 19.5))
 
 func take_flight() -> void:
 	temporary_perch = false
-	next_perch = (perch + rng.randi_range(1, PERCHES.size() - 1)) % PERCHES.size()
+	var was_on_flower := perched_on_flower
+	perched_on_flower = false
 	flight_origin = insect_position
-	hover_point = flight_origin.lerp(plant_tip(PERCHES[next_perch], 2), 0.61) + Vector2(rng.randf_range(-14.0, 14.0), -rng.randf_range(15.0, 28.0))
+	var dest := Vector2.ZERO
+	if not flower_perches.is_empty() and (not was_on_flower or rng.randf() < 0.65):
+		if rng.randf() < 0.72:
+			perched_on_flower = true
+			flower_target = flower_perches[rng.randi_range(0, flower_perches.size() - 1)]
+			dest = flower_target
+	if not perched_on_flower:
+		next_perch = (perch + rng.randi_range(1, PERCHES.size() - 1)) % PERCHES.size()
+		dest = plant_tip(PERCHES[next_perch], 2)
+	hover_point = flight_origin.lerp(dest, 0.61) + Vector2(rng.randf_range(-14.0, 14.0), -rng.randf_range(15.0, 28.0))
 	set_flight(Flight.FLYING, rng.randf_range(0.8, 2.0))
 
 func set_flight(state: Flight, duration: float) -> void:
@@ -184,6 +252,7 @@ func disturb_perch(cursor: Vector2) -> void:
 
 func place_insect(point: Vector2, wet: bool) -> void:
 	insect_held = false
+	perched_on_flower = false
 	insect_position = point
 	if wet:
 		take_flight()
@@ -200,6 +269,12 @@ func disturb_water(point: Vector2, strength: float, surge: bool) -> void:
 		if away.length_squared() > 0.1:
 			fish_heading = away.normalized()
 		fish_alarm = 0.9
+	for minnow in fry:
+		if minnow.pos.distance_to(point) < (56.0 if surge else 34.0):
+			var away := minnow.pos - point
+			if away.length_squared() > 0.1:
+				minnow.heading = away.normalized()
+			minnow.alarm = 1.0
 
 func advance_fish(dt: float, water: Flow) -> void:
 	if fish_held:
@@ -222,7 +297,9 @@ func advance_fish(dt: float, water: Flow) -> void:
 		elif fish_alarm < 0.14 and fish_time >= fish_turn_due:
 			fish_turn_due = fish_time + rng.randf_range(0.55, 1.4)
 			fish_heading = fish_heading.rotated(rng.randf_range(-0.45, 0.45))
-		var stride := fish_heading * (11.0 + fish_alarm * 37.0) + velocity.limit_length(16.0) * 0.15
+		var twi := smoothstep(1.15, 1.90, current_day_phase)
+		var calm_pace := lerpf(11.0, 6.2, twi)
+		var stride := fish_heading * (calm_pace + fish_alarm * 37.0) + velocity.limit_length(16.0) * 0.15
 		var next := fish + stride * dt
 		if water.depth_at(next) < 0.13 or absf(next.y) > 30.0:
 			var toward_channel := Vector2(fish_heading.x, -signf(fish.y) * 0.72).normalized()
@@ -235,8 +312,9 @@ func advance_fish(dt: float, water: Flow) -> void:
 			if depth > 0.15 and depth < 0.42:
 				fish_surface.emit(fish)
 				fish_surface_due = INF
-		if fish_time >= (14.0 if fish_released else 5.0) or fish.x < 8.0 or fish.x > 314.0:
-			fish_due = clock + rng.randf_range(8.0, 20.0)
+		if fish_time >= (14.0 if fish_released else (7.5 if pool_richness > 0.35 else 5.0)) or fish.x < 8.0 or fish.x > 314.0:
+			var wait_scale := (0.62 if pool_richness > 0.35 else 1.0) * lerpf(1.0, 1.75, twi)
+			fish_due = clock + rng.randf_range(8.0, 20.0) * wait_scale
 			fish_time = -1.0
 			fish_released = false
 	elif clock >= fish_due:
@@ -264,7 +342,58 @@ func place_fish(point: Vector2, wet: bool) -> void:
 	fish_surface_due = 2.0
 	fish_heading = Vector2.RIGHT if point.x < 160.0 else Vector2.LEFT
 
+func advance_fry(dt: float, water: Flow) -> void:
+	var desired := 3 if pool_richness > 0.55 else (2 if pool_richness > 0.28 else 0)
+	if fry.size() < desired:
+		for _attempt in 4:
+			var probe := Vector2(rng.randf_range(58.0, 244.0), rng.randf_range(-16.0, 16.0))
+			if water.depth_at(probe) > 0.22 and water.velocity_at(probe).length() < 18.0:
+				var m := Fry.new()
+				m.pos = probe
+				m.heading = Vector2.from_angle(rng.randf() * TAU)
+				m.phase = rng.randf() * TAU
+				m.turn_due = rng.randf_range(0.4, 1.3)
+				fry.append(m)
+				break
+	for i in range(fry.size() - 1, -1, -1):
+		var m := fry[i]
+		m.alarm = move_toward(m.alarm, 0.0, dt * 1.1)
+		var v := water.velocity_at(m.pos)
+		var calm := pool_richness > 0.14 and water.depth_at(m.pos) > 0.18 and v.length() < 26.0 and m.alarm < 0.65
+		m.presence = move_toward(m.presence, 1.0 if (calm and i < desired) else 0.0, dt * (0.9 if calm else 1.8))
+		if m.presence <= 0.005 and (not calm or i >= desired):
+			fry.remove_at(i)
+			continue
+		var fry_twi := smoothstep(1.15, 1.90, current_day_phase)
+		m.turn_due -= dt
+		if m.turn_due <= 0.0:
+			m.turn_due = rng.randf_range(0.45, 1.35) * lerpf(1.0, 1.65, fry_twi)
+			m.heading = m.heading.rotated(rng.randf_range(-0.65, 0.65))
+		var speed := lerpf(8.5, 4.6, fry_twi) + m.alarm * 24.0
+		var next := m.pos + (m.heading * speed + v.limit_length(10.0) * 0.12) * dt
+		if water.depth_at(next) < 0.20 or absf(next.y) > 22.0 or next.x < 16.0 or next.x > 300.0:
+			m.heading = Vector2(-m.heading.x, -signf(m.pos.y) * 0.65).normalized()
+		else:
+			m.pos = next
+
 func draw_fish(canvas: Node2D, project: Callable, pointer: Vector2, foreground := false) -> void:
+	if not foreground:
+		for m in fry:
+			if m.presence <= 0.02:
+				continue
+			var fp: Vector2 = project.call(m.pos)
+			var fturn := m.heading.angle() - PI
+			var flick := sin(clock * (14.0 + m.alarm * 18.0) + m.phase) * 0.75
+			var fink := Color(0.11, 0.22, 0.22, m.presence * 0.56)
+			canvas.draw_colored_polygon(PackedVector2Array([
+				fp + Vector2(-2.2, 0.0).rotated(fturn),
+				fp + Vector2(-0.4, -0.65).rotated(fturn),
+				fp + Vector2(2.3, flick - 0.35).rotated(fturn),
+				fp + Vector2(2.0, flick + 0.55).rotated(fturn),
+				fp + Vector2(-0.5, 0.6).rotated(fturn),
+			]), fink)
+			canvas.draw_line(fp + Vector2(-1.1, -0.2).rotated(fturn), fp + Vector2(0.7, -0.15).rotated(fturn),
+				Color(0.56, 0.76, 0.68, m.presence * 0.28), 0.45)
 	if fish_time < 0.0:
 		return
 	if foreground != (fish_held or fish_stranded):
@@ -468,7 +597,8 @@ func draw_cicada(canvas: Node2D, pointer: Vector2, tint_at: Callable = Callable(
 func draw_insect(canvas: Node2D, pointer: Vector2, tint_at: Callable = Callable()) -> void:
 	var point := pointer - Vector2(0, 5) if insect_held else insect_position
 	var settled := insect_held or insect_state == Flight.PERCHED
-	var flex := sin(insect_age * 61.0) if not settled else sin(clock * 5.0) * smoothstep(0.87, 0.99, sin(clock * 0.7)) * 0.65
+	var resting_twilight := settled and not insect_held and current_day_phase > 1.45
+	var flex := 0.0 if resting_twilight else (sin(insect_age * 61.0) if not settled else sin(clock * 5.0) * smoothstep(0.87, 0.99, sin(clock * 0.7)) * 0.65)
 	var glint := apply_tint(Color(0.78, 0.91, 0.72, 0.63 + absf(flex) * 0.26), point, tint_at)
 	canvas.draw_line(point - Vector2(3.2, 0), point + Vector2(2.2, -0.6), apply_tint(Color("#345947"), point, tint_at), 0.8)
 	for side in [-1.0, 1.0]:

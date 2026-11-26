@@ -28,7 +28,9 @@ var canvas := SubViewport.new()
 var scene := View.new()
 var gate := Button.new()
 var rain_button := Button.new()
+var time_button := Button.new()
 var music_button := Button.new()
+var last_day_stage := 0
 var hud_actions: HBoxContainer
 var hud_idle := 0.0
 var controls_art := Controls.new()
@@ -193,10 +195,12 @@ func build_controls() -> void:
 	gate.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	controls_art.configure(reset, "重来", Controls.Action.RESTART, restart, "R")
 	controls_art.configure(rain_button, "下雨", Controls.Action.RAIN, toggle_rain)
+	controls_art.configure(time_button, "午后", Controls.Action.TIME, cycle_time, "T")
 	controls_art.configure(music_button, "音乐开", Controls.Action.MUSIC, toggle_music)
 	actions.add_child(gate)
 	actions.add_child(reset)
 	actions.add_child(rain_button)
+	actions.add_child(time_button)
 	actions.add_child(music_button)
 	var group_size := actions.get_combined_minimum_size()
 	var margin := Vector2(24, 22)
@@ -205,6 +209,13 @@ func build_controls() -> void:
 	actions.offset_top = -group_size.y - margin.y
 	actions.offset_right = -margin.x
 	actions.offset_bottom = -margin.y
+
+func cycle_time() -> void:
+	hud_idle = 0.0
+	var next_stage := (scene.current_day_stage() + 1) % 3
+	scene.set_day_stage(next_stage)
+	last_day_stage = next_stage
+	controls_art.set_time_stage(time_button, next_stage)
 
 func toggle_music() -> void:
 	hud_idle = 0.0
@@ -238,6 +249,8 @@ func restart() -> void:
 	scene.clear()
 	rain_button.text = "下雨"
 	controls_art.set_rain_active(rain_button, false)
+	last_day_stage = 0
+	controls_art.set_time_stage(time_button, 0)
 	if rain_audio != null:
 		rain_audio.stop()
 	if frog_audio != null:
@@ -303,10 +316,14 @@ func _process(delta: float) -> void:
 		lag -= STEP
 	scene.advance(delta)
 	var screen_mouse := get_global_mouse_position()
-	if (screen_mouse.x > 660.0 and screen_mouse.y > 650.0) or get_viewport().gui_get_hovered_control() != null:
+	if (screen_mouse.x > 540.0 and screen_mouse.y > 650.0) or get_viewport().gui_get_hovered_control() != null:
 		hud_idle = 0.0
 	else:
 		hud_idle += delta
+	var stage_now := scene.current_day_stage()
+	if scene.day_target < 0.0 and stage_now != last_day_stage:
+		last_day_stage = stage_now
+		controls_art.set_time_stage(time_button, stage_now)
 	if hud_actions != null:
 		var target_alpha := 0.62 if hud_idle > 3.5 else 1.0
 		hud_actions.modulate.a = lerpf(hud_actions.modulate.a, target_alpha,
@@ -336,7 +353,9 @@ func _process(delta: float) -> void:
 			if not cicada_audio.playing:
 				cicada_audio.volume_db = -60.0
 				cicada_audio.play()
-			cicada_audio.volume_db = -23.0 + linear_to_db(clampf(scene.summer.cicada_sing_level, 0.001, 1.0))
+			var p := clampf(scene.day_phase, 0.0, 2.0)
+			var dusk := smoothstep(0.0, 1.0, p) * (1.0 - smoothstep(1.0, 2.0, p))
+			cicada_audio.volume_db = -23.0 - 2.5 * dusk + linear_to_db(clampf(scene.summer.cicada_sing_level, 0.001, 1.0))
 		elif cicada_audio.playing:
 			cicada_audio.stop()
 	if hearth_audio != null:
@@ -405,6 +424,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			cancel_grab()
 		elif event.physical_keycode in [KEY_ENTER, KEY_SPACE]:
 			opening()
+		elif event.physical_keycode == KEY_T:
+			cycle_time()
 		return
 	if event is InputEventMouseMotion:
 		var pointer := stage_pointer(event.position)

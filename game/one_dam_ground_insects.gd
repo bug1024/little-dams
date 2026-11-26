@@ -297,10 +297,12 @@ func pick_mole_target(project: Callable) -> Vector2:
 			return fallback
 	return mole.position
 
-func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, ripple: Callable) -> void:
+func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, ripple: Callable, day_phase := 0.0) -> void:
 	if dt <= 0.0:
 		return
 	time += dt
+	var twilight := smoothstep(1.10, 1.85, day_phase)
+	var resting_night := day_phase > 1.50
 	var gap := mole.position.distance_to(mantis.position)
 	if held == null and not close_encounter and gap < CLEARANCE + 5.0:
 		close_encounter = true
@@ -315,7 +317,8 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 	if held == mole or encounter_pause > 0.0:
 		mole.speed = 0.0
 	else:
-		walk(mole, mantis, dt, WATER_SPEED if mole_wet else 48.0, ROAM_AREA)
+		var mole_pace := WATER_SPEED if mole_wet else lerpf(48.0, 22.0, twilight)
+		walk(mole, mantis, dt, mole_pace, ROAM_AREA)
 		if mole.stall_time >= 1.35:
 			mole.target = mole.position
 			mole.speed = 0.0
@@ -329,13 +332,16 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 	if held != mole and encounter_pause <= 0.0 and (mole.position.is_equal_approx(mole.target) or mole.speed == 0.0):
 		mole.rest -= dt
 		if mole.rest <= 0.0:
+			if resting_night and not mole_wet:
+				# Stay calmly on the current bank at twilight instead of crossing back and forth.
+				runs_to_cross = maxi(1, runs_to_cross)
 			if runs_to_cross == 0:
 				bank_side = -bank_side
 				runs_to_cross = rng.randi_range(2, 4)
 			else:
 				runs_to_cross -= 1
 			mole.target = pick_mole_target(project)
-			mole.rest = rng.randf_range(0.45, 2.15)
+			mole.rest = rng.randf_range(lerpf(0.45, 5.5, twilight), lerpf(2.15, 13.0, twilight))
 
 	var mantis_wet: bool = wet.call(unproject.call(mantis.position))
 	if held == mantis:
@@ -346,7 +352,8 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 		mantis.heading = Vector2.from_angle(lerp_angle(mantis.heading.angle(), threat, 1.0 - exp(-dt * 5.2)))
 	else:
 		var boundary := ROAM_AREA if mantis_wet or not mantis_patch.has_point(mantis.position) else mantis_patch
-		walk(mantis, mole, dt, 9.0 if mantis_wet else 3.25, boundary)
+		var mantis_pace := 9.0 if mantis_wet else lerpf(3.25, 1.75, twilight)
+		walk(mantis, mole, dt, mantis_pace, boundary)
 		if mantis.stall_time >= 2.2:
 			mantis.target = mantis.position
 			mantis.speed = 0.0
@@ -354,13 +361,19 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 			mantis.stall_time = 0.0
 			mantis.rest = rng.randf_range(0.4, 1.1)
 	if held != mantis and mantis_alert <= 0.54 and (mantis.position.is_equal_approx(mantis.target) or mantis.speed == 0.0):
-		mantis.rest -= dt
-		if mantis.rest <= 0.0:
-			var point := mantis.position + Vector2(rng.randf_range(-11.0, 11.0), rng.randf_range(-5.5, 5.5))
-			var candidate := point.clamp(mantis_patch.position, mantis_patch.end - Vector2.ONE * 0.5)
-			if not wet.call(unproject.call(candidate)) and point_clear(mantis, candidate, mole, ROAM_AREA):
-				mantis.target = candidate
-			mantis.rest = rng.randf_range(0.9, 3.2)
+		if resting_night and not mantis_wet:
+			# Diurnal mantis stays completely settled on dry land during blue-hour twilight.
+			mantis.target = mantis.position
+			mantis.speed = 0.0
+			mantis.rest = maxf(mantis.rest, 1.5)
+		else:
+			mantis.rest -= dt
+			if mantis.rest <= 0.0:
+				var point := mantis.position + Vector2(rng.randf_range(-11.0, 11.0), rng.randf_range(-5.5, 5.5))
+				var candidate := point.clamp(mantis_patch.position, mantis_patch.end - Vector2.ONE * 0.5)
+				if not wet.call(unproject.call(candidate)) and point_clear(mantis, candidate, mole, ROAM_AREA):
+					mantis.target = candidate
+				mantis.rest = rng.randf_range(0.9, 3.2) * lerpf(1.0, 2.8, twilight)
 
 func mark(crawler: Crawler, x: float, y: float) -> Vector2:
 	var p := crawler.position + (crawler.heading * x + crawler.heading.orthogonal() * y) * crawler.art_scale - Vector2(0, crawler.elevation)

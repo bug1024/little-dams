@@ -39,6 +39,8 @@ func run() -> void:
 	check_mole_anti_stuck()
 	check_crab()
 	check_bird()
+	check_time_of_day()
+	check_ecology_links()
 	check_music_cycle()
 	game.free()
 	quit(failures)
@@ -825,6 +827,118 @@ func check_bird() -> void:
 	expect(bird.state == bird.State.AWAY, "The bird clears the frame after departing naturally")
 	game.restart()
 	expect(bird.state == bird.State.AWAY, "Restart resets the bird state")
+
+func check_time_of_day() -> void:
+	game.restart()
+	var view := game.scene
+	expect(view.day_phase == 0.0 and game.time_button.text == "午后", "Scene starts in bright afternoon")
+	game.cycle_time()
+	frames(160)
+	expect(absf(view.day_phase - 1.0) < 0.05 and game.time_button.text == "傍晚",
+		"Cycling time smoothly glides into golden sunset (%.2f)" % view.day_phase)
+	game.cycle_time()
+	frames(160)
+	expect(absf(view.day_phase - 2.0) < 0.05 and game.time_button.text == "微暮",
+		"Cycling time smoothly glides into blue-hour twilight (%.2f)" % view.day_phase)
+	expect(view.air.firefly_activity() > 0.85, "Twilight awakens glowing fireflies along the creek")
+
+	# In twilight, diurnal animals settle down calmly: cicadas quiet, birds roost, dragonfly & mantis rest still.
+	view.summer.cicada_call_due = 0.1
+	view.bird.away_due = 0.1
+	view.summer.insect_state = view.summer.Flight.PERCHED
+	view.summer.insect_age = view.summer.insect_duration + 2.0
+	view.ground_insects.mantis.target = view.ground_insects.mantis.position
+	view.ground_insects.mantis.speed = 0.0
+	view.ground_insects.mantis.rest = 0.05
+	view.ground_insects.mole.target = view.ground_insects.mole.position
+	view.ground_insects.mole.speed = 0.0
+	view.ground_insects.mole.rest = 0.05
+	var mantis_spot := view.ground_insects.mantis.position
+	view.pointer = Vector2(-20.0, -20.0)
+	view.bird.prev_pointer = Vector2.INF
+	frames(120)
+	expect(not view.summer.cicada_singing and view.bird.state == view.bird.State.AWAY,
+		"Cicadas and daytime birds rest during twilight")
+	expect(view.summer.insect_state == view.summer.Flight.PERCHED and view.ground_insects.mantis.position.is_equal_approx(mantis_spot),
+		"Dragonfly and mantis rest calmly without wandering during twilight")
+	expect(view.ground_insects.mole.rest > 3.0 or view.ground_insects.mole.speed < 26.0,
+		"Mole cricket slows down and rests longer on the bank during twilight")
+
+	# Frogs call actively in twilight while hopping much less frequently.
+	view.frog.rng.seed = 2027
+	var frog_calls := [0]
+	view.frog.croaked.connect(func() -> void: frog_calls[0] += 1)
+	frames(420)
+	expect(frog_calls[0] >= 1 and view.frog.pause > 2.5, "Frogs sit calmly and call actively in twilight")
+
+	game.cycle_time()
+	frames(300)
+	expect(view.day_phase < 0.05 and game.time_button.text == "午后", "Cycling again returns cleanly to afternoon")
+	game.restart()
+	expect(view.day_phase == 0.0 and game.time_button.text == "午后", "Restart resets time of day to afternoon")
+
+func check_ecology_links() -> void:
+	game.restart()
+	var view := game.scene
+	var summer := view.summer
+	summer.rng.seed = 3119
+
+	# 1. Building a dam that impounds deep calm water draws out creek minnow fry.
+	var built_stone: Materials.Piece
+	for y in [-29.0, -17.0, -5.0, 7.0, 19.0, 31.0]:
+		var s := put(game.model, Vector2(146.0, y), 10.0, Materials.STONE)
+		if built_stone == null and absf(y) < 10.0:
+			built_stone = s
+		put(game.model, Vector2(156.0, y), 8.0, Materials.EARTH)
+	game.water.rebuild_obstacles(game.model, game.lower)
+	frames(360)
+	expect(summer.fry.size() >= 2, "Impounding a deep calm dam pool draws out small minnow fry (%d)" % summer.fry.size())
+
+	# 2. Decorating a dam stone with a flower attracts the dragonfly to perch on it.
+	var flower: View.Floater
+	for item in view.floaters:
+		if item.forage == View.Forage.FLOWER:
+			flower = item
+			break
+	if flower != null and built_stone != null:
+		view.place_floater(flower, view.piece_screen(built_stone))
+	summer.insect_age = summer.insect_duration
+	var landed_on_flower := false
+	for i in 1200:
+		frames(1)
+		if summer.perched_on_flower and summer.insect_state == summer.Flight.PERCHED:
+			landed_on_flower = true
+			break
+	expect(landed_on_flower, "A flower decorating a dam stone attracts the dragonfly to perch")
+
+	# 3. Stopping a rain shower enters post-rain afterglow, nudging frog calls and bringing the bird back.
+	game.restart()
+	view.pointer = Vector2(-20.0, -20.0)
+	view.bird.prev_pointer = Vector2.INF
+	view.bird.rng.seed = 5151
+	game.toggle_rain()
+	frames(160)
+	game.toggle_rain()
+	var saw_after_rain := false
+	for i in 220:
+		frames(1)
+		if view.rain.after_rain > 0.25:
+			saw_after_rain = true
+			break
+	expect(saw_after_rain and view.frog.call_due <= 2.3 and view.bird.away_due <= 4.0,
+		"Post-rain clearing triggers afterglow, frog call nudge, and eager bird return")
+
+	# 4. Igniting the hearth startles a nearby bird.
+	game.restart()
+	view.bird.state = view.bird.State.PERCHED
+	view.bird.position = Hearth.CENTER + Vector2(-34.0, 6.0)
+	view.bird.startled = false
+	view.hearth.wood = 2.0
+	view.hearth.grass = 1.0
+	var lit := view.ignite_hearth(Hearth.CENTER)
+	expect(lit and view.bird.state == view.bird.State.DEPARTING and view.bird.startled,
+		"Igniting the hearth startles a bird perched nearby")
+	game.restart()
 
 func check_music_cycle() -> void:
 	var director := game.music_director

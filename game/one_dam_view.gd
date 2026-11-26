@@ -100,6 +100,10 @@ var preview_bank_drop := false
 var preview_active := false
 var pry_mode := false
 var clock := 0.0
+var day_phase := 0.0
+var day_target := -1.0
+var auto_day_cycle := true
+var post_rain_nudged := false
 var streaks := PackedVector2Array()
 var water_pixels := Image.create_empty(Flow.COLUMNS, Flow.ROWS, false, Image.FORMAT_RGBA8)
 var flow_texture := ImageTexture.create_from_image(water_pixels)
@@ -235,7 +239,10 @@ func clear() -> void:
 	summer.fish_due = summer.clock + 4.0
 	summer.insect_held = false
 	summer.temporary_perch = false
-	summer.reset_cicada()
+	summer.reset_ecosystem()
+	day_phase = 0.0
+	day_target = -1.0
+	post_rain_nudged = false
 	bank.clear()
 	pipes.clear()
 	rolling.clear()
@@ -511,8 +518,17 @@ func can_fuel_hearth(item: Floater) -> bool:
 func ignite_hearth(point: Vector2) -> bool:
 	if hearth.contains(point) and hearth.can_ignite():
 		hearth.ignite()
+		bird.disturb(Hearth.CENTER, 72.0)
 		return true
 	return false
+
+func set_day_stage(stage: int) -> void:
+	day_target = float(clampi(stage, 0, 2))
+
+func current_day_stage() -> int:
+	if day_phase < 0.5:
+		return 0
+	return 1 if day_phase < 1.45 else 2
 
 func blocked_at(basin: Pool, at: Vector2, clearance: float) -> bool:
 	for piece in basin.wall:
@@ -630,24 +646,43 @@ func sync_surface(dt: float) -> void:
 
 func advance(dt: float) -> void:
 	clock += dt
+	if day_target >= 0.0:
+		day_phase = move_toward(day_phase, day_target, dt * 0.45)
+	elif auto_day_cycle:
+		day_phase = minf(2.0, day_phase + dt * 0.0032)
 	wind.advance(dt)
 	hearth.advance(dt, rain.intensity, wind)
 	var hearth_glow := Vector3(Hearth.CENTER.x / SIZE.x, Hearth.CENTER.y / SIZE.y, hearth.firelight)
-	scenery.advance(dt, wind, rain.wetness, rain.intensity, hearth_glow)
+	scenery.advance(dt, wind, rain.wetness, rain.intensity, hearth_glow, day_phase)
 	advance_surge(dt)
 	advance_riffle(dt)
 	advance_floaters(dt)
 	advance_streaks(dt)
-	summer.advance(dt, water, rain.intensity)
+	summer.flower_perches.clear()
+	for item in floaters:
+		if item.host != null and item.forage in [Forage.FLOWER, Forage.FOXTAIL]:
+			summer.flower_perches.append(forage_screen(item) + Vector2(0.0, -4.5))
+	var upper_p := pool_profile(model, 146.0)
+	var lower_p := pool_profile(lower, 262.0)
+	var pool_richness := smoothstep(0.16, 0.52, maxf(upper_p.y, lower_p.y))
+	if rain.after_rain > 0.85 and not post_rain_nudged:
+		post_rain_nudged = true
+		frog.nudge_call(2.2)
+	elif rain.after_rain < 0.10:
+		post_rain_nudged = false
+	summer.advance(dt, water, rain.intensity, day_phase, pool_richness, rain.after_rain)
 	ground_insects.frog_blocker = frog.position if frog.duration <= 0.0 else Vector2.INF
 	ground_insects.crab_blocker = crab.position if not crab.held else Vector2.INF
 	refresh_insect_terrain()
-	bird.advance(dt, pointer, rain.intensity, ground_insects.rocks, bird_spot_wet)
-	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple)
-	frog.advance(dt, frog_clear)
+	bird.advance(dt, pointer, rain.intensity, ground_insects.rocks, bird_spot_wet,
+		day_phase, rain.after_rain, rain.active_puddle_spots(), Hearth.CENTER, hearth.firelight > 0.15)
+	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple, day_phase)
+	var twilight_calm := smoothstep(1.10, 1.85, day_phase)
+	var frog_activity := clampf(maxf(smoothstep(0.80, 1.85, day_phase), rain.after_rain * 0.85), 0.0, 1.0)
+	frog.advance(dt, frog_clear, frog_activity, twilight_calm)
 	var pointer_busy := holding_animal() or held != null or held_pipe != null or held_floater != null
 	crab.advance(dt, pointer, pointer_busy, ground_insects.rocks, to_screen, from_screen, insect_in_water,
-		water, surge_at, crab_clear, insect_ripple, [ground_insects.mole.position, ground_insects.mantis.position, frog.position])
+		water, surge_at, crab_clear, insect_ripple, [ground_insects.mole.position, ground_insects.mantis.position, frog.position], day_phase)
 	for crawler in [ground_insects.mole, ground_insects.mantis]:
 		if crawler != ground_insects.held:
 			summer.disturb_perch(crawler.position)
@@ -657,15 +692,18 @@ func advance(dt: float) -> void:
 	rain.advance_drops(dt, self)
 	sync_surface(dt)
 	surface.set_shader_parameter("creek_time", clock)
-	surface.set_shader_parameter("upper_pool", pool_profile(model, 146.0))
-	surface.set_shader_parameter("lower_pool", pool_profile(lower, 262.0))
+	surface.set_shader_parameter("upper_pool", upper_p)
+	surface.set_shader_parameter("lower_pool", lower_p)
 	var trail := wind.trail()
 	ground_light.set_shader_parameter("wind_trail", trail)
 	ground_light.set_shader_parameter("canopy_flutter", wind.canopy_flutter())
 	ground_light.set_shader_parameter("sun_drift", wind.sunlight)
+	ground_light.set_shader_parameter("day_phase", day_phase)
 	surface.set_shader_parameter("wind_trail", trail)
 	surface.set_shader_parameter("wind_travel", wind.travel)
 	surface.set_shader_parameter("sun_drift", wind.sunlight)
+	surface.set_shader_parameter("day_phase", day_phase)
+	surface.set_shader_parameter("hearth_light", hearth_glow)
 	ground_light.set_shader_parameter("rain_wetness", rain.wetness)
 	ground_light.set_shader_parameter("rain_intensity", rain.intensity)
 	ground_light.set_shader_parameter("hearth_light", hearth_glow)
@@ -844,18 +882,34 @@ func animal_hover_target(point: Vector2) -> Vector3:
 func env_modulate(screen_pos: Vector2) -> Color:
 	var uv := (screen_pos / SIZE).clamp(Vector2.ZERO, Vector2.ONE)
 	var shade := Wind.canopy_cover(uv)
-	var sun_factor := (0.62 + wind.sunlight.z * 0.38) * (1.0 - rain.intensity * 0.75)
+	var p := clampf(day_phase, 0.0, 2.0)
+	var dusk := smoothstep(0.0, 1.0, p) * (1.0 - smoothstep(1.0, 2.0, p))
+	var twi := smoothstep(0.85, 2.0, p)
+	var sun_factor := (0.62 + wind.sunlight.z * 0.38) * (1.0 - rain.intensity * 0.75) * (1.0 - twi * 0.85)
 	var light := Color.WHITE.lerp(Color(0.84, 0.89, 0.95), shade * 0.42)
 	light = light.lerp(Color(1.04, 1.01, 0.95), (1.0 - shade) * sun_factor * 0.22)
+	if dusk > 0.001:
+		var sun_side := smoothstep(0.18, 0.77, uv.x + (1.0 - uv.y) * 0.34)
+		var sunset_grade := Color(0.84, 0.81, 0.94).lerp(Color(1.13, 0.90, 0.70), sun_side)
+		light = light.lerp(light * sunset_grade, dusk)
+	if twi > 0.001:
+		light = light.lerp(light * Color(0.58, 0.69, 0.90), twi)
 	light *= Color.WHITE.lerp(Color(0.75, 0.82, 0.90), rain.wetness * 0.82)
 	if hearth.firelight > 0.005:
+		var reach := 48.0 * (1.0 + dusk * 0.12 + twi * 0.34)
 		var d := screen_pos.distance_to(Hearth.CENTER)
-		var glow := pow(maxf(0.0, 1.0 - d / 48.0), 2.0) * hearth.firelight * (0.72 + rain.wetness * 0.38)
+		var evening_boost := 1.0 + dusk * 0.45 + twi * 1.15
+		var glow := pow(maxf(0.0, 1.0 - d / reach), 2.0) * hearth.firelight * (0.72 + rain.wetness * 0.38) * evening_boost
 		light += Color(0.28, 0.13, 0.035, 0.0) * glow
 	return Color(light.r, light.g, light.b, 1.0)
 
 func foam_ink(alpha := 1.0) -> Color:
+	var p := clampf(day_phase, 0.0, 2.0)
+	var dusk := smoothstep(0.0, 1.0, p) * (1.0 - smoothstep(1.0, 2.0, p))
+	var twi := smoothstep(0.85, 2.0, p)
 	var tone := Color("#dceee2").lerp(Color("#c7dfdf"), rain.intensity)
+	tone = tone.lerp(Color("#e8c8a2"), dusk * 0.65)
+	tone = tone.lerp(Color("#88a5c2"), twi * 0.72)
 	return Color(tone, alpha)
 
 func shade_color(base: Color, screen_pos: Vector2) -> Color:

@@ -63,7 +63,7 @@ func make_prop(label: StringName, texture: Texture2D, origin: Vector2, anchor: f
 	prop.sprite.material = prop.material
 	return prop
 
-func advance(dt: float, wind: Wind, wetness: float, rainfall: float, hearth_glow := Vector3.ZERO) -> void:
+func advance(dt: float, wind: Wind, wetness: float, rainfall: float, hearth_glow := Vector3.ZERO, day_phase := 0.0) -> void:
 	var trail := wind.trail()
 	for i in plants.size():
 		var plant := plants[i]
@@ -73,17 +73,18 @@ func advance(dt: float, wind: Wind, wetness: float, rainfall: float, hearth_glow
 		var bow := Vector2(lean * 1.30, lean * 0.35 + wind.flutter(79 + i * 3) * 0.85)
 		plant.breeze = plant.breeze.lerp(bow, 1.0 - exp(-dt * (8.0 - i)))
 		plant.material.set_shader_parameter("prop_sway", plant.breeze)
-		sync_light(plant, wind, trail, wetness, rainfall, hearth_glow)
-	sync_light(ledge, wind, trail, wetness, rainfall, hearth_glow)
+		sync_light(plant, wind, trail, wetness, rainfall, hearth_glow, day_phase)
+	sync_light(ledge, wind, trail, wetness, rainfall, hearth_glow, day_phase)
 	foreground.queue_redraw()
 
-func sync_light(prop: Prop, wind: Wind, trail: Vector4, wetness: float, rainfall: float, hearth_glow := Vector3.ZERO) -> void:
+func sync_light(prop: Prop, wind: Wind, trail: Vector4, wetness: float, rainfall: float, hearth_glow := Vector3.ZERO, day_phase := 0.0) -> void:
 	prop.material.set_shader_parameter("wind_trail", trail)
 	prop.material.set_shader_parameter("canopy_flutter", wind.canopy_flutter())
 	prop.material.set_shader_parameter("sun_drift", wind.sunlight)
 	prop.material.set_shader_parameter("rain_wetness", wetness)
 	prop.material.set_shader_parameter("rain_intensity", rainfall)
 	prop.material.set_shader_parameter("hearth_light", hearth_glow)
+	prop.material.set_shader_parameter("day_phase", day_phase)
 
 func plant_at(point: Vector2) -> bool:
 	for plant in plants:

@@ -19,6 +19,8 @@ var enabled := false
 var intensity := 0.0
 var runoff := 0.0
 var wetness := 0.0
+var had_rain := false
+var after_rain := 0.0
 var puddles := PackedFloat32Array()
 var drops: Array[Drop] = []
 var drop_lag := 0.0
@@ -33,6 +35,8 @@ func clear() -> void:
 	intensity = 0.0
 	runoff = 0.0
 	wetness = 0.0
+	had_rain = false
+	after_rain = 0.0
 	puddles.fill(0.0)
 	drops.clear()
 	drop_lag = 0.0
@@ -42,8 +46,29 @@ func advance(dt: float) -> void:
 	intensity = move_toward(intensity, 1.0 if enabled else 0.0, dt * (0.29 if enabled else 0.41))
 	runoff = lerpf(runoff, intensity, 1.0 - exp(-dt * (0.49 if intensity > runoff else 0.23)))
 	wetness = clampf(wetness + (intensity * 0.23 - (0.022 + wetness * 0.036)) * dt, 0.0, 1.0)
+	if intensity > 0.35:
+		had_rain = true
+		after_rain = 0.0
+	elif not enabled and had_rain and intensity < 0.16:
+		after_rain = 1.0
+		had_rain = false
+	elif intensity < 0.15 and after_rain > 0.0:
+		after_rain = move_toward(after_rain, 0.0, dt / 22.0)
 	for i in puddles.size():
 		puddles[i] = clampf(puddles[i] + (intensity * (0.13 + i * 0.012) - (0.028 + i * 0.003)) * dt, 0.0, 1.0)
+
+func active_puddle_spots() -> Array[Vector2]:
+	var spots: Array[Vector2] = []
+	for i in puddles.size():
+		if puddles[i] <= 0.22:
+			continue
+		var p: Vector3 = PUDDLES[i]
+		# Pick dry edge just beside the puddle, skipping bottom-right HUD area.
+		var edge := Vector2(p.x - p.z - 4.0, p.y - 2.0)
+		if edge.x > 142.0 and edge.y > 162.0:
+			continue
+		spots.append(edge)
+	return spots
 
 func advance_drops(dt: float, view) -> void:
 	drop_lag += dt * intensity * 116.0

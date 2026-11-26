@@ -11,12 +11,21 @@ class Mote:
 	var height := 0.0
 	var phase := 0.0
 
+class Firefly:
+	var anchor: Vector2
+	var pos: Vector2
+	var phase := 0.0
+	var period := 4.4
+	var drift_phase := 0.0
+	var radius := Vector2(12.0, 6.0)
+
 var wind: Wind
 var view
 var clock := 0.0
 var rng := RandomNumberGenerator.new()
 var fluff: Array[Mote] = []
 var dust: Array[Mote] = []
+var fireflies: Array[Firefly] = []
 var leaf: Mote
 var leaf_turn := 0.0
 var leaf_rest := 0.0
@@ -28,6 +37,27 @@ func _ready() -> void:
 		fluff.append(make_mote(Vector2(rng.randf_range(0.0, SIZE.x), rng.randf_range(0.0, SIZE.y)), rng.randf_range(5.0, 24.0)))
 	for i in 22:
 		dust.append(make_mote(Vector2(rng.randf_range(10.0, 190.0), rng.randf_range(10.0, 150.0)), 0.0))
+	for spot: Vector2 in [
+		Vector2(28, 134), Vector2(46, 152), Vector2(78, 138), Vector2(128, 154),
+		Vector2(174, 140), Vector2(236, 126), Vector2(278, 120), Vector2(256, 158),
+		Vector2(54, 42), Vector2(118, 44), Vector2(168, 56), Vector2(218, 36),
+		Vector2(286, 46), Vector2(148, 114),
+	]:
+		var f := Firefly.new()
+		f.anchor = spot
+		f.pos = spot
+		f.phase = rng.randf_range(0.0, TAU)
+		f.period = rng.randf_range(3.2, 5.8)
+		f.drift_phase = rng.randf_range(0.0, TAU)
+		f.radius = Vector2(rng.randf_range(8.0, 16.0), rng.randf_range(4.5, 9.0))
+		fireflies.append(f)
+
+func firefly_activity() -> float:
+	if view == null:
+		return 0.0
+	var phase: float = view.day_phase
+	var rainfall: float = view.rain.intensity
+	return smoothstep(0.65, 1.55, phase) * (1.0 - rainfall * 0.85)
 
 func make_mote(at: Vector2, height: float) -> Mote:
 	var mote := Mote.new()
@@ -58,6 +88,11 @@ func advance(dt: float) -> void:
 		mote.ground += (drift + Wind.DIRECTION * breeze(mote.ground) * 3.0) * dt
 		if mote.ground.x > 200.0 or mote.ground.y > 160.0:
 			mote.ground = Vector2(rng.randf_range(0.0, 120.0), rng.randf_range(0.0, 60.0))
+	for f in fireflies:
+		var t := clock * 0.42 + f.drift_phase
+		var sway := Vector2(sin(t) * f.radius.x, sin(t * 1.63 + 0.8) * f.radius.y)
+		var gentle_wind := Wind.DIRECTION * breeze(f.anchor) * 3.0
+		f.pos = (f.anchor + sway + gentle_wind).clamp(Vector2(6.0, 8.0), SIZE - Vector2(6.0, 8.0))
 	advance_leaf(dt)
 	queue_redraw()
 
@@ -98,29 +133,56 @@ func snap(point: Vector2) -> Vector2:
 func _draw() -> void:
 	if wind == null:
 		return
+	var phase: float = view.day_phase if view != null else 0.0
+	var dusk := smoothstep(0.0, 1.0, phase) * (1.0 - smoothstep(1.0, 2.0, phase))
+	var twi := smoothstep(0.85, 2.0, phase)
 	var light_shift := Vector2(wind.sunlight.x, wind.sunlight.y)
+	var dust_tint := Color(1.0, 0.92, 0.70).lerp(Color(1.0, 0.78, 0.46), dusk)
 	for mote in dust:
 		var p := mote.ground / SIZE
-		var light := Wind.sun_shafts(p - light_shift, clock, breeze(mote.ground)) * wind.sunlight.z
+		var light := Wind.sun_shafts(p - light_shift, clock, breeze(mote.ground)) * wind.sunlight.z * (1.0 - twi * 0.92)
 		light *= 0.5 + 0.5 * sin(clock * 3.0 + mote.phase)
 		if light > 0.05:
-			draw_rect(Rect2(snap(mote.ground), Vector2(0.5, 0.5)), Color(1.0, 0.92, 0.70, minf(0.85, light * 1.1)))
-	draw_gnats()
+			draw_rect(Rect2(snap(mote.ground), Vector2(0.5, 0.5)), Color(dust_tint, minf(0.85, light * 1.1)))
+	draw_gnats(1.0 - smoothstep(0.85, 1.65, phase))
 	for mote in fluff:
-		var lit := 1.0 - Wind.canopy_cover(mote.ground / SIZE) * 0.55
+		var lit := (1.0 - Wind.canopy_cover(mote.ground / SIZE) * 0.55) * (1.0 - twi * 0.35)
 		var at := snap(mote.ground - Vector2(0.0, mote.height))
-		draw_rect(Rect2(at, Vector2(0.5, 0.5)), Color(1.0, 0.98, 0.90, 0.95 * lit))
+		var fluff_col := Color(1.0, 0.98, 0.90).lerp(Color(1.0, 0.88, 0.72), dusk * 0.55).lerp(Color(0.76, 0.85, 0.96), twi * 0.65)
+		draw_rect(Rect2(at, Vector2(0.5, 0.5)), Color(fluff_col, 0.95 * lit))
 		for side in [Vector2(0.5, 0.0), Vector2(-0.5, 0.0), Vector2(0.0, 0.5), Vector2(0.0, -0.5)]:
-			draw_rect(Rect2(at + side, Vector2(0.5, 0.5)), Color(1.0, 0.96, 0.86, 0.30 * lit))
+			draw_rect(Rect2(at + side, Vector2(0.5, 0.5)), Color(fluff_col, 0.30 * lit))
+	var glow_activity := firefly_activity()
+	if glow_activity > 0.02:
+		draw_fireflies(glow_activity)
 	if leaf != null:
 		draw_falling_leaf()
 
-func draw_gnats() -> void:
+func draw_fireflies(activity: float) -> void:
+	for i in fireflies.size():
+		var f := fireflies[i]
+		# Stagger emergence so early dusk only shows a few fireflies near the reeds.
+		var threshold := float(i) / float(fireflies.size()) * 0.65
+		var presence := smoothstep(threshold, threshold + 0.35, activity)
+		if presence <= 0.02:
+			continue
+		var wave := sin(clock * TAU / f.period + f.phase)
+		var pulse := pow(maxf(0.0, smoothstep(-0.15, 0.92, wave)), 1.65) * presence
+		if pulse <= 0.04:
+			continue
+		var at := snap(f.pos)
+		draw_rect(Rect2(at - Vector2(2.0, 2.0), Vector2(4.5, 4.5)), Color(0.45, 0.72, 0.31, pulse * 0.20))
+		draw_rect(Rect2(at - Vector2(1.0, 1.0), Vector2(2.5, 2.5)), Color(0.66, 0.84, 0.35, pulse * 0.45))
+		draw_rect(Rect2(at, Vector2(0.75, 0.75)), Color(0.91, 0.96, 0.55, minf(1.0, pulse * 0.95)))
+
+func draw_gnats(visibility := 1.0) -> void:
+	if visibility <= 0.02:
+		return
 	var center := GNATS + Vector2(sin(clock * 0.27) * 4.0, sin(clock * 0.19 + 1.0) * 2.5) + Wind.DIRECTION * breeze(GNATS) * 5.0
 	for i in 7:
 		var offset := Vector2(sin(clock * (4.1 + i * 0.7) + i * 1.9) * 3.2, cos(clock * (5.3 + i * 0.55) + i * 2.7) * 2.2 - 11.0)
 		var glint := sin(clock * 9.0 + i * 2.3) > 0.72
-		var ink := Color(1.0, 0.90, 0.62, 0.85) if glint else Color(0.17, 0.16, 0.12, 0.7)
+		var ink := Color(1.0, 0.90, 0.62, 0.85 * visibility) if glint else Color(0.17, 0.16, 0.12, 0.7 * visibility)
 		draw_rect(Rect2(snap(center + offset), Vector2(0.5, 0.5)), ink)
 
 func draw_falling_leaf() -> void:

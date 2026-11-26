@@ -99,7 +99,7 @@ func step_clear(rocks: Array, clear_animals: Callable, start: Vector2, next: Vec
 
 func advance(dt: float, pointer: Vector2, pointer_busy: bool, rocks: Array, project: Callable,
 		unproject: Callable, in_water: Callable, water, surge_fn: Callable,
-		clear_animals: Callable, ripple: Callable, nearby_critters: Array) -> void:
+		clear_animals: Callable, ripple: Callable, nearby_critters: Array, day_phase := 0.0) -> void:
 	if dt <= 0.0:
 		return
 	clock += dt
@@ -252,11 +252,12 @@ func advance(dt: float, pointer: Vector2, pointer_busy: bool, rocks: Array, proj
 		ripple.call(bed_pos)
 		ripple_delay = 0.42
 
+	var twilight := smoothstep(1.15, 1.85, day_phase)
 	# Blow tiny bubbles while resting quietly in the water.
 	bubble_due -= dt
 	if wet and speed < 1.0 and bubble_due <= 0.0:
 		spawn_bubble()
-		bubble_due = rng.randf_range(2.8, 6.0)
+		bubble_due = rng.randf_range(lerpf(2.8, 4.5, twilight), lerpf(6.0, 9.5, twilight))
 
 	# On dry bank: actively crawl back into the water. In water: stay still most of the time, only making occasional tiny shifts.
 	if not wet:
@@ -270,7 +271,7 @@ func advance(dt: float, pointer: Vector2, pointer_busy: bool, rocks: Array, proj
 		rest -= dt
 		if rest <= 0.0:
 			target = pick_water_shift(rocks, clear_animals, unproject, in_water)
-			rest = rng.randf_range(6.0, 12.5)
+			rest = rng.randf_range(lerpf(6.0, 14.0, twilight), lerpf(12.5, 28.0, twilight))
 
 func spawn_bubble() -> void:
 	var b := Bubble.new()

@@ -130,22 +130,29 @@ void fragment() {
 	float foliage = smoothstep(0.035, 0.19, land.g - land.b) * smoothstep(-0.04, 0.065, land.g - land.r);
 	land = mix(land, value * vec3(1.07, 1.005, 0.91), 0.07 + max(ochre * 0.16, foliage * 0.14));
 	land -= smoothstep(0.56, 0.86, value) * vec3(0.048, 0.034, 0.018);
+	float dusk = dusk_weight();
+	float twi = twilight_weight();
 	float sunlit = sunlight_at(p) * smoothstep(0.26, 0.58, value) * (0.73 + patches * 0.27);
-	land += vec3(0.081, 0.071, 0.054) * sunlit * (1.0 - rain_intensity * 0.82);
+	vec3 sun_tint = mix(vec3(0.081, 0.071, 0.054), vec3(0.135, 0.068, 0.024), dusk);
+	land += sun_tint * sunlit * (1.0 - rain_intensity * 0.82) * (1.0 - twi * 0.92);
 	float leaf_shade = cast_leaf_shade(p, texel) * smoothstep(0.30, 0.58, value);
-	land *= mix(vec3(1.0), vec3(0.88, 0.91, 0.96), leaf_shade * (0.72 + sunlit * 0.28) * (1.0 - rain_intensity * 0.66));
+	land *= mix(vec3(1.0), vec3(0.88, 0.91, 0.96), leaf_shade * (0.72 + sunlit * 0.28) * (1.0 - rain_intensity * 0.66) * (1.0 - twi * 0.75));
 	float soaked = rain_wetness * (0.66 + patches * 0.34);
 	land *= mix(vec3(1.0), vec3(0.74, 0.81, 0.89), soaked);
-	land += vec3(0.046, 0.062, 0.059) * soaked * green * smoothstep(0.47, 0.68, value);
+	land += vec3(0.046, 0.062, 0.059) * soaked * green * smoothstep(0.47, 0.68, value) * (1.0 - twi * 0.55);
 	if (hearth_light.z > 0.005) {
-		vec2 fire_offset = (p - hearth_light.xy) / vec2(0.145, 0.165);
-		float fire_falloff = pow(max(0.0, 1.0 - length(fire_offset)), 2.1);
+		vec2 fire_radius = vec2(0.145, 0.165) * (1.0 + dusk * 0.12 + twi * 0.34);
+		vec2 fire_offset = (p - hearth_light.xy) / fire_radius;
+		float fire_falloff = pow(max(0.0, 1.0 - length(fire_offset)), 2.0);
 		float glow_grain = 0.86 + 0.28 * earth_patch(pixel / 3.5);
-		float glow = fire_falloff * hearth_light.z * glow_grain * (0.72 + rain_wetness * 0.38);
-		land += vec3(0.24, 0.115, 0.032) * glow * (0.45 + 0.55 * smoothstep(0.08, 0.52, value));
-		land = mix(land, land * vec3(1.14, 0.99, 0.86), min(0.65, glow * 0.75));
+		float evening_boost = 1.0 + dusk * 0.45 + twi * 1.15;
+		float glow = fire_falloff * hearth_light.z * glow_grain * (0.72 + rain_wetness * 0.38) * evening_boost;
+		land += vec3(0.24, 0.115, 0.032) * glow * (0.48 + 0.52 * smoothstep(0.06, 0.50, value));
+		land = mix(land, land * vec3(1.16, 0.99, 0.84), min(0.72, glow * 0.70));
 	}
 	float mist = rain_intensity * (0.10 * (1.0 - p.y) + 0.035);
-	land = mix(land, vec3(0.58, 0.66, 0.69), mist);
+	vec3 mist_color = mix(vec3(0.58, 0.66, 0.69), vec3(0.62, 0.52, 0.50), dusk * 0.75);
+	mist_color = mix(mist_color, vec3(0.24, 0.32, 0.46), twi);
+	land = mix(land, mist_color, mist);
 	COLOR = vec4(land, independent_prop ? silhouette : 1.0);
 }
