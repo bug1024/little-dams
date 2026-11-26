@@ -21,6 +21,135 @@ static func frog_call() -> AudioStreamWAV:
 	stream.data = samples
 	return stream
 
+static func cicada_song() -> AudioStreamWAV:
+	const RATE := 22050
+	const CYCLE := 0.58
+	const FRAMES := roundi(RATE * CYCLE * 8.0)
+	const FADE := 3200
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8147
+	var buffer := PackedFloat32Array()
+	buffer.resize(FRAMES + FADE)
+	var phase := 0.0
+	var harm_phase := 0.0
+	var hp_prev := 0.0
+	var lp := 0.0
+	for i in buffer.size():
+		var time := float(i) / RATE
+		var phrase := fposmod(time, CYCLE) / CYCLE
+		# "Zhi---liao" rhythmic swell: bright attack in first half, gentle descent in second half.
+		var s1 := smoothstep(0.02, 0.22, phrase) * (1.0 - smoothstep(0.42, 0.58, phrase))
+		var s2 := smoothstep(0.48, 0.64, phrase) * (1.0 - smoothstep(0.84, 0.98, phrase)) * 0.72
+		var phrase_env := clampf(0.16 + s1 * 0.84 + s2 * 0.65, 0.0, 1.0)
+		var tymbal := 0.58 + 0.42 * sin(TAU * 118.0 * time + sin(TAU * 19.0 * time) * 0.6)
+		var base_freq := 4320.0 + s1 * 260.0 - s2 * 190.0 + sin(TAU * 6.5 * time) * 45.0
+		phase += TAU * base_freq / RATE
+		harm_phase += TAU * (base_freq * 1.19) / RATE
+		var white := rng.randf_range(-1.0, 1.0)
+		var hp := white - hp_prev
+		hp_prev = white
+		lp += (hp - lp) * 0.48
+		var tone := sin(phase) * 0.56 + sin(harm_phase) * 0.28 + lp * 0.32
+		var breath := 0.88 + 0.12 * sin(TAU * time / (CYCLE * 4.0))
+		buffer[i] = tone * tymbal * phrase_env * breath
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	for i in FRAMES:
+		var value := buffer[i]
+		if i < FADE:
+			value = lerpf(buffer[FRAMES + i], value, smoothstep(0.0, 1.0, float(i) / FADE))
+		samples.encode_s16(i * 2, clampi(roundi(value * 11500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_end = FRAMES
+	return stream
+
+static func cicada_buzz() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.24
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8291
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var phase := 0.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var t := time / DURATION
+		var env := smoothstep(0.0, 0.12, t) * (1.0 - smoothstep(0.45, 1.0, t))
+		var tymbal := 0.52 + 0.48 * sin(TAU * 135.0 * time)
+		var freq := lerpf(4850.0, 3950.0, t)
+		phase += TAU * freq / RATE
+		var grit := rng.randf_range(-0.22, 0.22)
+		var sample := (sin(phase) * 0.72 + sin(phase * 1.18) * 0.24 + grit) * tymbal * env
+		samples.encode_s16(i * 2, clampi(roundi(sample * 10500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
+static func bird_chirp() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.26
+	const FRAMES := roundi(RATE * DURATION)
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var phase := 0.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var note1 := smoothstep(0.004, 0.025, time) * (1.0 - smoothstep(0.065, 0.105, time))
+		var note2 := smoothstep(0.115, 0.145, time) * (1.0 - smoothstep(0.205, 0.255, time))
+		var env := maxf(note1 * 0.85, note2)
+		var f1 := lerpf(3100.0, 3950.0, smoothstep(0.0, 0.055, time)) - smoothstep(0.055, 0.105, time) * 500.0
+		var f2 := lerpf(3400.0, 4250.0, smoothstep(0.115, 0.175, time)) - smoothstep(0.175, 0.255, time) * 650.0
+		var freq := f1 if time < 0.11 else f2
+		phase += TAU * freq / RATE
+		var tone := sin(phase) * 0.86 + sin(phase * 2.0) * 0.14
+		samples.encode_s16(i * 2, clampi(roundi(tone * env * 9500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
+static func bird_flutter() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.34
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 9413
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var low := 0.0
+	var hp_prev := 0.0
+	var chirp_phase := 0.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var t := time / DURATION
+		var beats := 0.25 + 0.75 * pow(maxf(0.0, sin(TAU * 16.0 * time)), 1.6)
+		var flutter_env := smoothstep(0.0, 0.08, t) * (1.0 - smoothstep(0.35, 1.0, t)) * beats
+		var white := rng.randf_range(-1.0, 1.0)
+		var hp := white - hp_prev
+		hp_prev = white
+		low += (hp - low) * 0.18
+		var wing_sound := low * flutter_env * 2.4
+		var alarm := 0.0
+		if time < 0.085:
+			var at := time / 0.085
+			var alarm_env := smoothstep(0.0, 0.16, at) * (1.0 - smoothstep(0.45, 1.0, at))
+			chirp_phase += TAU * lerpf(3600.0, 4400.0, at) / RATE
+			alarm = sin(chirp_phase) * alarm_env * 0.48
+		samples.encode_s16(i * 2, clampi(roundi((wing_sound + alarm) * 10500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
 static func quiet_rain() -> AudioStreamWAV:
 	const RATE := 22050
 	const FRAMES := RATE * 5

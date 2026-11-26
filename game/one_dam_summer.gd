@@ -2,8 +2,10 @@ extends RefCounted
 
 const Flow = preload("res://game/one_dam_grid.gd")
 const Wind = preload("res://game/one_dam_wind.gd")
-const CICADA_PERCH := Vector2(148.5, 64.0)
+const CICADA_PERCH := Vector2(58.5, 19.5)
 signal fish_surface(point: Vector2)
+signal cicada_sang
+signal cicada_startled
 
 const SEDGES := [
 	Vector3(25, 120, 7.5), Vector3(23, 122, 3.4), Vector3(28, 124, 4.7),
@@ -39,6 +41,15 @@ var insect_held := false
 var temporary_perch := false
 var cicada_position := CICADA_PERCH
 var cicada_held := false
+var cicada_wet := false
+var cicada_singing := false
+var cicada_sing_age := 0.0
+var cicada_sing_duration := 0.0
+var cicada_sing_level := 0.0
+var cicada_call_due := 3.5
+var cicada_twitch := 0.0
+var cicada_twitch_due := 4.2
+var cicada_angle := -2.42
 var flight_origin := Vector2.ZERO
 var hover_point := Vector2.ZERO
 var surface_impulse := 0.0
@@ -46,11 +57,71 @@ var impulse_x := 0.0
 var rng := RandomNumberGenerator.new()
 var wind: Wind
 
-func advance(dt: float, water: Flow) -> void:
+func advance(dt: float, water: Flow, rain_intensity := 0.0) -> void:
 	clock += dt
 	surface_impulse = move_toward(surface_impulse, 0.0, dt * 0.58)
 	advance_insect(dt)
+	advance_cicada(dt, rain_intensity)
 	advance_fish(dt, water)
+
+func reset_cicada() -> void:
+	cicada_position = CICADA_PERCH
+	cicada_held = false
+	cicada_wet = false
+	cicada_singing = false
+	cicada_sing_age = 0.0
+	cicada_sing_duration = 0.0
+	cicada_sing_level = 0.0
+	cicada_call_due = 3.5
+	cicada_twitch = 0.0
+	cicada_twitch_due = 4.2
+
+func grab_cicada() -> void:
+	cicada_held = true
+	cicada_singing = false
+	cicada_sing_level = 0.0
+	cicada_call_due = rng.randf_range(5.0, 9.0)
+	cicada_twitch = 1.0
+	cicada_startled.emit()
+
+func place_cicada(point: Vector2, wet: bool) -> void:
+	cicada_held = false
+	cicada_position = point
+	cicada_wet = wet
+	cicada_singing = false
+	cicada_call_due = rng.randf_range(4.5, 9.5)
+	cicada_twitch = 0.65
+
+func advance_cicada(dt: float, rain_intensity: float) -> void:
+	cicada_twitch = move_toward(cicada_twitch, 0.0, dt * 4.2)
+	if cicada_held:
+		cicada_singing = false
+		cicada_sing_level = move_toward(cicada_sing_level, 0.0, dt * 8.0)
+		return
+	cicada_twitch_due -= dt
+	if cicada_twitch_due <= 0.0:
+		cicada_twitch = rng.randf_range(0.45, 0.85)
+		cicada_twitch_due = rng.randf_range(4.5, 10.5)
+	var quiet_weather := rain_intensity > 0.25 or cicada_wet
+	if cicada_singing:
+		cicada_sing_age += dt
+		if quiet_weather or cicada_sing_age >= cicada_sing_duration:
+			cicada_singing = false
+			cicada_call_due = rng.randf_range(9.5, 20.0)
+		else:
+			var attack := smoothstep(0.0, 0.72, cicada_sing_age)
+			var release := 1.0 - smoothstep(maxf(0.72, cicada_sing_duration - 1.15), cicada_sing_duration, cicada_sing_age)
+			var cadence := 0.78 + 0.22 * sin(cicada_sing_age * TAU / 0.58)
+			cicada_sing_level = move_toward(cicada_sing_level, attack * release * cadence, dt * 6.0)
+	else:
+		cicada_sing_level = move_toward(cicada_sing_level, 0.0, dt * (5.0 if quiet_weather else 2.2))
+		if not quiet_weather:
+			cicada_call_due -= dt
+			if cicada_call_due <= 0.0:
+				cicada_singing = true
+				cicada_sing_age = 0.0
+				cicada_sing_duration = rng.randf_range(3.6, 6.4)
+				cicada_sang.emit()
 
 func plant_sway(index: int, stem: int) -> float:
 	var root: Vector3 = SEDGES[index]
@@ -233,7 +304,7 @@ func draw_land(canvas: Node2D, tint_at: Callable = Callable()) -> void:
 			var blade := split.lerp(tip, 0.53)
 			canvas.draw_line(blade, blade + Vector2(1.0 + sway * 0.6, -1.1), apply_tint(ink.lightened(0.11), root, tint_at), 0.5)
 
-	draw_cicada_leaf(canvas, tint_at)
+	draw_cicada_perch(canvas, tint_at)
 	for leaf in [Vector3(58, 155, -0.7), Vector3(60.5, 154, 0.6), Vector3(59, 157, 2.9),
 			Vector3(187, 151, 0.4), Vector3(196, 46, -1.7), Vector3(109, 169, 2.8)]:
 		draw_litter_leaf(canvas, Vector2(leaf.x, leaf.y), leaf.z, apply_tint(Color("#96744a"), Vector2(leaf.x, leaf.y), tint_at))
@@ -259,39 +330,140 @@ func draw_litter_leaf(canvas: Node2D, at: Vector2, turn: float, ink: Color) -> v
 	canvas.draw_colored_polygon(shape, ink)
 	canvas.draw_line(at, at + Vector2(1.7, -0.4).rotated(turn), ink.darkened(0.26), 0.5)
 
-func draw_cicada_leaf(canvas: Node2D, tint_at: Callable = Callable()) -> void:
+func snap(point: Vector2) -> Vector2:
+	return (point * 2.0).round() * 0.5
+
+func draw_cicada_perch(canvas: Node2D, tint_at: Callable = Callable()) -> void:
 	var p := CICADA_PERCH
-	canvas.draw_line(p + Vector2(6, 1), p + Vector2(8.0, 4.0), apply_tint(Color("#59653a"), p, tint_at), 0.75)
-	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-8.5, -2.5), p + Vector2(-4.5, -4.0),
-		p + Vector2(0.5, -4.5), p + Vector2(5.0, -3.0), p + Vector2(7, 1.0),
-		p + Vector2(4.5, 3.0), p + Vector2(-1.0, 2.5), p + Vector2(-6.5, 0.0)]), apply_tint(Color("#374932"), p, tint_at))
-	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-8.0, -2.5), p + Vector2(-3.5, -3.5),
-		p + Vector2(0.5, -4.0), p + Vector2(4.5, -2.5), p + Vector2(6.0, 0.5),
-		p + Vector2(3.5, 2.0), p + Vector2(-1.0, 2.0), p + Vector2(-5.5, -0.5)]), apply_tint(Color("#61754a"), p, tint_at))
-	canvas.draw_line(p + Vector2(-6.0, -2.0), p + Vector2(5.5, 0.5), apply_tint(Color("#7d895a"), p, tint_at), 0.5)
-	for x: float in [-3.5, 0.0, 3.0]:
-		var rib := p + Vector2(x, x * 0.20 - 0.65)
-		canvas.draw_line(rib, rib + Vector2(-1.5, -1.7), apply_tint(Color("#788857"), p, tint_at), 0.5)
-		canvas.draw_line(rib, rib + Vector2(0.4, 1.45), apply_tint(Color("#4e6742"), p, tint_at), 0.5)
+	var sway := (wind.flutter(23) * 0.35) if wind != null else 0.0
+	var tip := snap(p + Vector2(-7.5 + sway, -5.5))
+	var tail := snap(p + Vector2(5.5, 3.8))
+	var fork_root := snap(p + Vector2(1.5, 1.0))
+	var fork_tip := snap(p + Vector2(4.2 + sway * 0.5, -1.2))
+	# Deep shadow leaves tucking the branch into the upper-left canopy.
+	for row in [
+		[Vector2(-7.0, -4.5), Vector2(-4.5, -7.0), Vector2(-1.5, -5.2), Color("#223321")],
+		[Vector2(2.0, -2.5), Vector2(5.5, -3.5), Vector2(4.5, -0.5), Color("#334829")],
+		[Vector2(3.5, 2.5), Vector2(7.0, 1.8), Vector2(5.8, 4.8), Color("#223321")],
+	]:
+		var pts := PackedVector2Array([snap(p + row[0]), snap(p + row[1]), snap(p + row[2])])
+		canvas.draw_colored_polygon(pts, apply_tint(row[3], p, tint_at))
+	# Dark twig core, bark tone, and subtle upper rim highlight.
+	canvas.draw_line(tip + Vector2(0.0, 0.75), tail + Vector2(0.0, 0.75), apply_tint(Color("#222119"), p, tint_at), 1.75)
+	canvas.draw_line(tip, tail, apply_tint(Color("#4a3d2d"), p, tint_at), 1.5)
+	canvas.draw_line(tip + Vector2(0.5, -0.4), tail + Vector2(-0.5, -0.4), apply_tint(Color("#6c5a41"), p, tint_at), 0.5)
+	canvas.draw_line(fork_root, fork_tip, apply_tint(Color("#4a3d2d"), p, tint_at), 0.9)
+	canvas.draw_line(fork_root + Vector2(0.0, -0.35), fork_tip + Vector2(-0.2, -0.35), apply_tint(Color("#6c5a41"), p, tint_at), 0.45)
 
 func draw_cicada(canvas: Node2D, pointer: Vector2, tint_at: Callable = Callable()) -> void:
 	var at := pointer - Vector2(0, 5) if cicada_held else cicada_position
-	var p := (at * 2.0).round() * 0.5
+	var at_home := not cicada_held and cicada_position.distance_to(CICADA_PERCH) < 2.5
+	var sway := (wind.flutter(23) * 0.35) if (at_home and wind != null) else 0.0
+	var base := snap(at + Vector2(sway * 0.5, 0.0))
+	var body_turn := cicada_angle + (sin(clock * 22.0) * 0.10 if cicada_held else sin(clock * 15.0) * 0.05 * cicada_twitch)
+	var fwd := Vector2.from_angle(body_turn)
+	var side := Vector2(-fwd.y, fwd.x)
+	var pump := (0.28 + 0.25 * sin(cicada_sing_age * TAU / 0.58)) * cicada_sing_level
+	var wing_spread := (0.75 + sin(clock * 64.0) * 0.35) if cicada_held else (
+		0.42 * cicada_sing_level + sin(clock * 74.0) * 0.32 * cicada_sing_level + cicada_twitch * 0.22)
+
+	var shadow_poly := PackedVector2Array()
 	if not cicada_held:
-		canvas.draw_line(p + Vector2(-2.0, 0.5), p + Vector2(3.5, 1.5), Color("#253e327d"), 2.0)
+		for local_pt: Vector2 in [Vector2(3.4, -1.3), Vector2(3.4, 1.3), Vector2(-4.5, 1.4), Vector2(-5.2, 0.0), Vector2(-4.5, -1.4)]:
+			shadow_poly.append(snap(base + Vector2(0.5, 1.0) + fwd * local_pt.x + side * local_pt.y))
+		canvas.draw_colored_polygon(shadow_poly, Color("#141e176e"))
+
+	# 1. Six jointed clinging legs (fore, mid, hind pairs).
 	for i in 3:
-		var joint := p + Vector2(-2.0 + i * 1.5, i * 0.28)
-		canvas.draw_line(joint, joint + Vector2(-0.75, 1.5), apply_tint(Color("#3f5636"), p, tint_at), 0.55)
-		canvas.draw_line(joint, joint + Vector2(-0.6, -1.3), apply_tint(Color("#49653d"), p, tint_at), 0.55)
-	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-3.5, -1.5), p + Vector2(-2.0, -2.1),
-		p + Vector2(1.0, -1.5), p + Vector2(4.0, 0.9), p + Vector2(2.9, 1.7), p + Vector2(-2.9, 0.5)]), apply_tint(Color("#2b4432"), p, tint_at))
-	canvas.draw_colored_polygon(PackedVector2Array([p + Vector2(-2.0, -1.7), p + Vector2(0.0, -1.3),
-		p + Vector2(3.4, 1.0), p + Vector2(1.7, 0.93), p + Vector2(-1.3, 0.1)]), apply_tint(Color("#96af68"), p, tint_at))
-	canvas.draw_line(p + Vector2(-1.5, -1.15), p + Vector2(2.9, 0.9), apply_tint(Color("#c1c88b"), p, tint_at), 0.5)
-	canvas.draw_line(p + Vector2(-2.0, -0.2), p + Vector2(2.1, 1.1), apply_tint(Color("#708e54"), p, tint_at), 0.5)
-	canvas.draw_rect(Rect2(p + Vector2(-3.5, -1.75), Vector2(2.0, 2.0)), apply_tint(Color("#8da85b"), p, tint_at))
-	canvas.draw_rect(Rect2(p + Vector2(-3.75, -1.75), Vector2(0.75, 0.75)), apply_tint(Color("#26362c"), p, tint_at))
-	canvas.draw_rect(Rect2(p + Vector2(-3.25, 0), Vector2(0.75, 0.5)), apply_tint(Color("#304532"), p, tint_at))
+		var u: float = [1.7, 0.2, -1.2][i]
+		var leg_kick := sin(clock * 28.0 + i * 2.1) * 0.85 if cicada_held else 0.0
+		var femur_reach := 1.45 if i == 1 else (1.35 if i == 0 else 1.55)
+		var tibia_back := -0.75 if i == 2 else (0.35 if i == 0 else -0.25)
+		for s: float in [-1.0, 1.0]:
+			var root_pt := snap(base + fwd * u + side * (s * 0.85))
+			var knee_pt := snap(base + fwd * (u + (0.25 if i == 0 else -0.25)) + side * (s * (femur_reach + leg_kick * s)))
+			var foot_pt := snap(base + fwd * (u + tibia_back + leg_kick * 0.3) + side * (s * (femur_reach + 0.45)))
+			canvas.draw_line(root_pt, knee_pt, apply_tint(Color("#2a221b"), base, tint_at), 0.65)
+			canvas.draw_line(knee_pt, foot_pt, apply_tint(Color("#493b2c"), base, tint_at), 0.55)
+
+	# 2. Segmented dark-brown abdomen (pumps gently while singing).
+	var ab_shift := -fwd * pump
+	var ab_poly := PackedVector2Array()
+	for local_pt: Vector2 in [Vector2(0.2, -1.3), Vector2(-2.2, -1.05), Vector2(-3.5, 0.0), Vector2(-2.2, 1.05), Vector2(0.2, 1.3)]:
+		ab_poly.append(snap(base + ab_shift + fwd * local_pt.x + side * local_pt.y))
+	canvas.draw_colored_polygon(ab_poly, apply_tint(Color("#26201b"), base, tint_at))
+	for band_u: float in [-0.45, -1.35, -2.25]:
+		var w := 1.05 if band_u > -1.0 else (0.9 if band_u > -2.0 else 0.65)
+		canvas.draw_line(snap(base + ab_shift + fwd * band_u - side * w),
+			snap(base + ab_shift + fwd * band_u + side * w), apply_tint(Color("#735a39"), base, tint_at), 0.55)
+
+	# 3. Broad thorax with classic ochre collar / M-pattern markings.
+	var thorax_poly := PackedVector2Array()
+	for local_pt: Vector2 in [Vector2(2.6, -1.45), Vector2(1.1, -1.65), Vector2(0.1, -1.35),
+			Vector2(0.1, 1.35), Vector2(1.1, 1.65), Vector2(2.6, 1.45)]:
+		thorax_poly.append(snap(base + fwd * local_pt.x + side * local_pt.y))
+	canvas.draw_colored_polygon(thorax_poly, apply_tint(Color("#2e261f"), base, tint_at))
+	# Pronotum collar stripe and mesonotum M-mark.
+	canvas.draw_line(snap(base + fwd * 2.15 - side * 1.15), snap(base + fwd * 2.15 + side * 1.15),
+		apply_tint(Color("#846940"), base, tint_at), 0.6)
+	canvas.draw_polyline(PackedVector2Array([
+		snap(base + fwd * 0.4 - side * 0.95),
+		snap(base + fwd * 1.4 - side * 0.45),
+		snap(base + fwd * 0.7),
+		snap(base + fwd * 1.4 + side * 0.45),
+		snap(base + fwd * 0.4 + side * 0.95),
+	]), apply_tint(Color("#a48652"), base, tint_at), 0.55)
+
+	# 4. Wide flat head, protruding dark-amber compound eyes, and short antennae.
+	var head_poly := PackedVector2Array()
+	for local_pt: Vector2 in [Vector2(3.45, -1.2), Vector2(2.5, -1.5), Vector2(2.5, 1.5), Vector2(3.45, 1.2)]:
+		head_poly.append(snap(base + fwd * local_pt.x + side * local_pt.y))
+	canvas.draw_colored_polygon(head_poly, apply_tint(Color("#332b21"), base, tint_at))
+	canvas.draw_rect(Rect2(snap(base + fwd * 2.95) - Vector2(0.25, 0.25), Vector2(0.5, 0.5)),
+		apply_tint(Color("#b38f52"), base, tint_at))
+	for s: float in [-1.0, 1.0]:
+		var eye_pos := snap(base + fwd * 3.05 + side * (s * 1.45))
+		canvas.draw_rect(Rect2(eye_pos - Vector2(0.5, 0.5), Vector2(1.25, 1.25)), apply_tint(Color("#221612"), base, tint_at))
+		canvas.draw_rect(Rect2(eye_pos - Vector2(0.25, 0.25), Vector2(0.9, 0.9)), apply_tint(Color("#8a4b2b"), base, tint_at))
+		canvas.draw_rect(Rect2(eye_pos + Vector2(-0.15, -0.25), Vector2(0.45, 0.45)), apply_tint(Color("#d9b57e"), base, tint_at))
+		# Short bristly antenna on front of head.
+		canvas.draw_line(snap(base + fwd * 3.35 + side * (s * 0.55)),
+			snap(base + fwd * 4.15 + side * (s * 1.0)), apply_tint(Color("#554632"), base, tint_at), 0.5)
+
+	# 5. Roof-like translucent veined wings extending well past the abdomen tip.
+	var wing_membrane := apply_tint(Color(0.75, 0.71, 0.55, 0.40), base, tint_at)
+	var wing_base_tint := apply_tint(Color(0.36, 0.29, 0.20, 0.65), base, tint_at)
+	var costa_ink := apply_tint(Color("#3c3222"), base, tint_at)
+	var sub_costa := apply_tint(Color("#725f3e"), base, tint_at)
+	var vein_ink := apply_tint(Color(0.30, 0.26, 0.18, 0.72), base, tint_at)
+	var glint_ink := apply_tint(Color(0.93, 0.90, 0.76, 0.30 + 0.18 * cicada_sing_level), base, tint_at)
+	for s: float in [-1.0, 1.0]:
+		var flare := wing_spread * s
+		var wing_pts := PackedVector2Array([
+			snap(base + fwd * 1.3 + side * (s * 0.95)),
+			snap(base + fwd * -0.4 + side * (s * 1.85 + flare * 0.7)),
+			snap(base + fwd * -3.2 + side * (s * 1.9 + flare * 1.35)),
+			snap(base + fwd * -5.0 + side * (s * 0.9 + flare * 1.45)),
+			snap(base + fwd * -3.6 + side * (s * 0.22 + flare * 0.85)),
+			snap(base + fwd * 0.4 + side * (s * 0.35 + flare * 0.15)),
+		])
+		canvas.draw_colored_polygon(wing_pts, wing_membrane)
+		var base_patch := PackedVector2Array([
+			wing_pts[0],
+			snap(base + fwd * 0.0 + side * (s * 1.55 + flare * 0.45)),
+			snap(base + fwd * -0.9 + side * (s * 0.75 + flare * 0.35)),
+			wing_pts[5],
+		])
+		canvas.draw_colored_polygon(base_patch, wing_base_tint)
+		# Costal margin vein + inner dark branching veins + subtle sheen.
+		canvas.draw_polyline(PackedVector2Array([wing_pts[0], wing_pts[1], wing_pts[2], wing_pts[3]]), costa_ink, 0.6)
+		canvas.draw_line(wing_pts[0], wing_pts[2], sub_costa, 0.45)
+		canvas.draw_line(snap(base + fwd * 0.3 + side * (s * 1.05 + flare * 0.25)),
+			snap(base + fwd * -4.0 + side * (s * 1.2 + flare * 1.15)), vein_ink, 0.5)
+		canvas.draw_line(snap(base + fwd * -0.8 + side * (s * 0.75 + flare * 0.35)),
+			snap(base + fwd * -3.5 + side * (s * 0.5 + flare * 0.9)), vein_ink, 0.45)
+		canvas.draw_line(snap(base + fwd * -0.6 + side * (s * 1.45 + flare * 0.55)),
+			snap(base + fwd * -2.9 + side * (s * 1.65 + flare * 1.15)), glint_ink, 0.45)
 
 func draw_insect(canvas: Node2D, pointer: Vector2, tint_at: Callable = Callable()) -> void:
 	var point := pointer - Vector2(0, 5) if insect_held else insect_position

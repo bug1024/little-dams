@@ -38,6 +38,7 @@ func run() -> void:
 	check_frog_and_loach()
 	check_mole_anti_stuck()
 	check_crab()
+	check_bird()
 	check_music_cycle()
 	game.free()
 	quit(failures)
@@ -579,20 +580,63 @@ func check_insect_drag() -> void:
 func check_cicada() -> void:
 	game.restart()
 	var view := game.scene
-	var start := view.summer.cicada_position
+	var summer := view.summer
+	var start := summer.cicada_position
+	expect(start.x < 90.0 and start.y < 36.0 and view.on_bank(start),
+		"The cicada hides perched in the upper-left canopy shade")
 	frames(120)
-	expect(view.summer.cicada_position == start and view.on_bank(start), "The cicada rests on its bank leaf")
+	expect(summer.cicada_position == start and view.on_bank(start), "The cicada rests on its shaded twig")
 	pointer_button(start, true)
-	expect(view.summer.cicada_held and view.holding_animal(), "The hand can grab the green cicada")
+	expect(summer.cicada_held and view.holding_animal(), "The hand can grab the cicada")
 	pointer_button(Vector2(-5, -5), false)
-	expect(not view.summer.cicada_held and view.summer.cicada_position == start, "An invalid cicada drop restores its perch")
+	expect(not summer.cicada_held and summer.cicada_position == start, "An invalid cicada drop restores its perch")
 	pointer_button(start, true)
 	var landing := Vector2(121.0, 45.0)
 	pointer_button(landing, false)
 	frames(120)
-	expect(not view.summer.cicada_held and view.summer.cicada_position == landing, "The cicada stays where the player sets it down")
+	expect(not summer.cicada_held and summer.cicada_position == landing, "The cicada stays where the player sets it down")
 	game.restart()
-	expect(view.summer.cicada_position == start, "Restart returns the cicada to its leaf")
+	expect(summer.cicada_position == start, "Restart returns the cicada to its shaded twig")
+
+	# Intermittent chirping bursts separated by natural quiet pauses.
+	summer.rng.seed = 4109
+	var calls := [0]
+	var startled := [0]
+	summer.cicada_sang.connect(func() -> void: calls[0] += 1)
+	summer.cicada_startled.connect(func() -> void: startled[0] += 1)
+	for i in 300:
+		frames(1)
+		if summer.cicada_singing and summer.cicada_sing_level > 0.5:
+			break
+	expect(calls[0] == 1 and summer.cicada_singing and summer.cicada_sing_level > 0.5,
+		"The cicada begins an intermittent chirping burst")
+	for i in 520:
+		frames(1)
+		if not summer.cicada_singing and summer.cicada_sing_level < 0.05:
+			break
+	expect(not summer.cicada_singing and summer.cicada_sing_level < 0.05 and summer.cicada_call_due >= 9.0,
+		"The cicada fades into a quiet pause between bursts (%.1fs)" % summer.cicada_call_due)
+	for i in 1400:
+		frames(1)
+		if calls[0] >= 2 and summer.cicada_singing:
+			break
+	expect(calls[0] >= 2 and summer.cicada_singing, "Another cicada burst arrives after the quiet break")
+
+	# Rain silences the cicada gradually.
+	game.toggle_rain()
+	frames(150)
+	expect(not summer.cicada_singing and summer.cicada_sing_level < 0.05, "Rain quiets the cicada")
+
+	# Grabbing a singing cicada triggers a startled buzz and stops the song.
+	game.restart()
+	for i in 300:
+		frames(1)
+		if summer.cicada_singing:
+			break
+	pointer_button(summer.cicada_position, true)
+	expect(startled[0] >= 1 and summer.cicada_held and not summer.cicada_singing,
+		"Grabbing a singing cicada startles it and stops the chorus")
+	game.restart()
 
 func check_frog_and_loach() -> void:
 	game.restart()
@@ -711,6 +755,76 @@ func check_crab() -> void:
 
 	game.restart()
 	expect(crab.position.is_equal_approx(home), "Restart returns the crab to its creek home")
+
+func check_bird() -> void:
+	game.restart()
+	var view := game.scene
+	var bird := view.bird
+	bird.rng.seed = 9417
+	view.pointer = Vector2(-20.0, -20.0)
+	bird.prev_pointer = Vector2.INF
+	expect(bird.state == bird.State.AWAY, "The bird starts away from the creek")
+
+	for i in 520:
+		frames(1)
+		if bird.state == bird.State.PERCHED:
+			break
+	expect(bird.state == bird.State.PERCHED and view.on_bank(bird.position) and not (bird.position.x > 165.0 and bird.position.y > 162.0),
+		"The bird flies in and lands briefly beside the path")
+
+	# Cannot hover or grab the bird; clicking near it startles it away instead.
+	expect(view.animal_hover_target(bird.position) == Vector3.ZERO, "The bird shows no interactive hover target")
+	pointer_button(bird.position, true)
+	expect(not view.holding_animal() and bird.state == bird.State.DEPARTING and bird.startled,
+		"Clicking the bird cannot grab it and instead startles it into flight")
+	for i in 240:
+		frames(1)
+		if bird.state == bird.State.AWAY:
+			break
+	expect(bird.state == bird.State.AWAY, "The startled bird flies out of the scene")
+
+	# Wait for the next visit, then verify mouse proximity startles it.
+	var startled_events := [0]
+	bird.startled_off.connect(func() -> void: startled_events[0] += 1)
+	bird.away_due = 0.2
+	view.pointer = Vector2(-20.0, -20.0)
+	bird.prev_pointer = Vector2.INF
+	for i in 240:
+		frames(1)
+		if bird.state == bird.State.PERCHED:
+			break
+	expect(bird.state == bird.State.PERCHED, "The bird returns after a quiet interval")
+	view.pointer = bird.position + Vector2(12.0, 0.0)
+	frames(3)
+	expect(startled_events[0] >= 1 and bird.state == bird.State.DEPARTING and bird.startled,
+		"Moving the cursor close startles the bird into flying off")
+	for i in 240:
+		frames(1)
+		if bird.state == bird.State.AWAY:
+			break
+
+	# Without disturbance, it pauses briefly by the path and then flies away on its own.
+	bird.away_due = 0.2
+	view.pointer = Vector2(-20.0, -20.0)
+	bird.prev_pointer = Vector2.INF
+	for i in 240:
+		frames(1)
+		if bird.state == bird.State.PERCHED:
+			break
+	var left_naturally := false
+	for i in 800:
+		frames(1)
+		if bird.state == bird.State.DEPARTING and not bird.startled:
+			left_naturally = true
+			break
+	expect(left_naturally, "After a short roadside stay, the bird flies away naturally")
+	for i in 240:
+		frames(1)
+		if bird.state == bird.State.AWAY:
+			break
+	expect(bird.state == bird.State.AWAY, "The bird clears the frame after departing naturally")
+	game.restart()
+	expect(bird.state == bird.State.AWAY, "Restart resets the bird state")
 
 func check_music_cycle() -> void:
 	var director := game.music_director

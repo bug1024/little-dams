@@ -11,6 +11,7 @@ const Rain = preload("res://game/one_dam_rain.gd")
 const GroundInsects = preload("res://game/one_dam_ground_insects.gd")
 const Frog = preload("res://game/one_dam_frog.gd")
 const Crab = preload("res://game/one_dam_crab.gd")
+const Bird = preload("res://game/one_dam_bird.gd")
 const Hearth = preload("res://game/one_dam_hearth.gd")
 const Scenery = preload("res://game/one_dam_scenery.gd")
 const SIZE := Vector2(320, 200)
@@ -108,6 +109,7 @@ var summer := Summer.new()
 var ground_insects := GroundInsects.new()
 var frog := Frog.new()
 var crab := Crab.new()
+var bird := Bird.new()
 var wind := Wind.new()
 var rain := Rain.new()
 var hearth := Hearth.new()
@@ -225,6 +227,7 @@ func clear() -> void:
 	ground_insects.reset(to_screen)
 	frog.reset()
 	crab.reset()
+	bird.reset()
 	summer.fish_held = false
 	summer.fish_stranded = false
 	summer.fish_released = false
@@ -232,8 +235,7 @@ func clear() -> void:
 	summer.fish_due = summer.clock + 4.0
 	summer.insect_held = false
 	summer.temporary_perch = false
-	summer.cicada_position = Summer.CICADA_PERCH
-	summer.cicada_held = false
+	summer.reset_cicada()
 	bank.clear()
 	pipes.clear()
 	rolling.clear()
@@ -291,6 +293,7 @@ func burst(point: Vector2, strength: float) -> void:
 		ripples.append(Vector4(point.x, point.y, 0.0, strength))
 
 func material_touch(point: Vector2, mud: bool) -> void:
+	bird.disturb(to_screen(point), 78.0)
 	if not is_wet(point):
 		return
 	burst(point, 0.40 if mud else 0.62)
@@ -313,6 +316,7 @@ func launch(piece: Pool.Piece, strength: float) -> void:
 		water.cloud(piece.point, 0.25)
 
 func wave_impact(point: Vector2, strength: float) -> void:
+	bird.disturb(to_screen(point), 78.0)
 	summer.disturb_water(point, strength, true)
 	if is_wet(point + Vector2(7.0, 0.0)):
 		ripples.append(Vector4(point.x + 7.0, point.y, 0.0, minf(strength * 0.27, 0.40)))
@@ -634,10 +638,11 @@ func advance(dt: float) -> void:
 	advance_riffle(dt)
 	advance_floaters(dt)
 	advance_streaks(dt)
-	summer.advance(dt, water)
+	summer.advance(dt, water, rain.intensity)
 	ground_insects.frog_blocker = frog.position if frog.duration <= 0.0 else Vector2.INF
 	ground_insects.crab_blocker = crab.position if not crab.held else Vector2.INF
 	refresh_insect_terrain()
+	bird.advance(dt, pointer, rain.intensity, ground_insects.rocks, bird_spot_wet)
 	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple)
 	frog.advance(dt, frog_clear)
 	var pointer_busy := holding_animal() or held != null or held_pipe != null or held_floater != null
@@ -701,6 +706,9 @@ func refresh_insect_terrain() -> void:
 func insect_in_water(point: Vector2) -> bool:
 	return is_wet(point) and not on_bank(to_screen(point))
 
+func bird_spot_wet(point: Vector2) -> bool:
+	return not on_bank(point) or insect_in_water(from_screen(point))
+
 func insect_ripple(point: Vector2) -> void:
 	ripples.append(Vector4(point.x, point.y, 0.0, 0.15))
 
@@ -747,8 +755,8 @@ func grab_animal(point: Vector2) -> bool:
 	if crab.position.distance_to(point) <= 7.5:
 		crab.held = true
 		return true
-	if summer.cicada_position.distance_to(point) <= 5.5:
-		summer.cicada_held = true
+	if summer.cicada_position.distance_to(point) <= 6.0:
+		summer.grab_cicada()
 		return true
 	summer.insect_held = summer.insect_position.distance_to(point) <= 9.0
 	if summer.insect_held:
@@ -794,7 +802,7 @@ func place_animal(point: Vector2) -> void:
 	elif summer.fish_held:
 		summer.place_fish(local, wet and water.depth_at(local) >= 0.13)
 	elif summer.cicada_held:
-		summer.cicada_position = point
+		summer.place_cicada(point, wet)
 	elif ground_insects.held != null:
 		var side := -1.0 if local.y < 0.0 else 1.0
 		var bank := to_screen(Vector2(local.x, side * 48.0)).clamp(Vector2(9, 9), SIZE - Vector2(9, 9))
@@ -820,8 +828,8 @@ func animal_hover_target(point: Vector2) -> Vector3:
 		return Vector3(mantis_pos.x, mantis_pos.y, 7.5)
 	if crab.position.distance_to(point) <= 7.5:
 		return Vector3(crab.position.x, crab.position.y, 6.5)
-	if summer.cicada_position.distance_to(point) <= 5.5:
-		return Vector3(summer.cicada_position.x, summer.cicada_position.y, 5.5)
+	if summer.cicada_position.distance_to(point) <= 6.0:
+		return Vector3(summer.cicada_position.x, summer.cicada_position.y, 6.0)
 	if summer.insect_position.distance_to(point) <= 9.0:
 		return Vector3(summer.insect_position.x, summer.insect_position.y, 5.5)
 	var frog_pos := frog.screen_point()
@@ -887,22 +895,29 @@ func _draw() -> void:
 	draw_floaters()
 	ground_insects.draw(self, pointer, false, scenery.in_front_of_ledge, false, shade_color)
 	summer.draw_insect(self, pointer, shade_color)
-	summer.draw_cicada(self, pointer, shade_color)
+	if not scenery.in_front_of_ledge(pointer if summer.cicada_held else summer.cicada_position):
+		summer.draw_cicada(self, pointer, shade_color)
 	summer.draw_fish(self, to_screen, pointer, true)
 	if not scenery.in_front_of_ledge(pointer if frog.held else frog.position):
 		frog.draw(self, pointer, shade_color)
 	if (not crab.wet or crab.held) and not scenery.in_front_of_ledge(pointer if crab.held else crab.position):
 		crab.draw(self, pointer, shade_color)
+	if not bird.is_airborne() and not scenery.in_front_of_ledge(bird.position):
+		bird.draw(self, shade_color)
 	hearth.draw_flame(self)
 
 func draw_shore_foreground() -> void:
 	var layer := scenery.foreground
 	ground_insects.draw(layer, pointer, true, scenery.in_front_of_ledge, true, shade_color)
 	ground_insects.draw(layer, pointer, false, scenery.in_front_of_ledge, true, shade_color)
+	if scenery.in_front_of_ledge(pointer if summer.cicada_held else summer.cicada_position):
+		summer.draw_cicada(layer, pointer, shade_color)
 	if scenery.in_front_of_ledge(pointer if frog.held else frog.position):
 		frog.draw(layer, pointer, shade_color)
 	if (not crab.wet or crab.held) and scenery.in_front_of_ledge(pointer if crab.held else crab.position):
 		crab.draw(layer, pointer, shade_color)
+	if bird.is_airborne() or scenery.in_front_of_ledge(bird.position):
+		bird.draw(layer, shade_color)
 	rain.draw_drops(layer)
 	if hovered_animal.z > 0.0:
 		draw_hover_halo(layer, Vector2(hovered_animal.x, hovered_animal.y), hovered_animal.z, hovered_animal.z * 0.78)

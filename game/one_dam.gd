@@ -42,6 +42,10 @@ var water_crest: AudioStreamPlayer
 var stone_splash: AudioStreamPlayer
 var rain_audio: AudioStreamPlayer
 var frog_audio: AudioStreamPlayer
+var cicada_audio: AudioStreamPlayer
+var cicada_buzz_audio: AudioStreamPlayer
+var bird_chirp_audio: AudioStreamPlayer
+var bird_flutter_audio: AudioStreamPlayer
 var hearth_audio: AudioStreamPlayer
 var held: Pool.Piece
 var held_floater: View.Floater
@@ -101,6 +105,31 @@ func _ready() -> void:
 		frog_audio.volume_db = -22.0
 		add_child(frog_audio)
 		scene.frog.croaked.connect(frog_audio.play)
+		cicada_audio = AudioStreamPlayer.new()
+		cicada_audio.stream = WaterAudio.cicada_song()
+		cicada_audio.volume_db = -60.0
+		add_child(cicada_audio)
+		scene.summer.cicada_sang.connect(func() -> void:
+			if cicada_audio != null:
+				cicada_audio.pitch_scale = randf_range(0.96, 1.04))
+		cicada_buzz_audio = AudioStreamPlayer.new()
+		cicada_buzz_audio.stream = WaterAudio.cicada_buzz()
+		cicada_buzz_audio.volume_db = -26.0
+		add_child(cicada_buzz_audio)
+		scene.summer.cicada_startled.connect(cicada_buzz_audio.play)
+		bird_chirp_audio = AudioStreamPlayer.new()
+		bird_chirp_audio.stream = WaterAudio.bird_chirp()
+		bird_chirp_audio.volume_db = -27.0
+		add_child(bird_chirp_audio)
+		scene.bird.chirped.connect(func() -> void:
+			if bird_chirp_audio != null:
+				bird_chirp_audio.pitch_scale = randf_range(0.94, 1.08)
+				bird_chirp_audio.play())
+		bird_flutter_audio = AudioStreamPlayer.new()
+		bird_flutter_audio.stream = WaterAudio.bird_flutter()
+		bird_flutter_audio.volume_db = -24.0
+		add_child(bird_flutter_audio)
+		scene.bird.startled_off.connect(bird_flutter_audio.play)
 		hearth_audio = AudioStreamPlayer.new()
 		hearth_audio.stream = WaterAudio.hearth_fire()
 		hearth_audio.volume_db = -60.0
@@ -213,6 +242,14 @@ func restart() -> void:
 		rain_audio.stop()
 	if frog_audio != null:
 		frog_audio.stop()
+	if cicada_audio != null:
+		cicada_audio.stop()
+	if cicada_buzz_audio != null:
+		cicada_buzz_audio.stop()
+	if bird_chirp_audio != null:
+		bird_chirp_audio.stop()
+	if bird_flutter_audio != null:
+		bird_flutter_audio.stop()
 	if hearth_audio != null:
 		hearth_audio.stop()
 	upper_breach.reset()
@@ -294,6 +331,14 @@ func _process(delta: float) -> void:
 		rain_audio.volume_db = -27.0 + linear_to_db(maxf(0.001, scene.rain.intensity))
 		if not scene.rain.enabled and scene.rain.intensity <= 0.0:
 			rain_audio.stop()
+	if cicada_audio != null:
+		if scene.summer.cicada_sing_level > 0.015:
+			if not cicada_audio.playing:
+				cicada_audio.volume_db = -60.0
+				cicada_audio.play()
+			cicada_audio.volume_db = -23.0 + linear_to_db(clampf(scene.summer.cicada_sing_level, 0.001, 1.0))
+		elif cicada_audio.playing:
+			cicada_audio.stop()
 	if hearth_audio != null:
 		if scene.hearth.firelight > 0.02:
 			if not hearth_audio.playing:
@@ -374,6 +419,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var point := stage_pointer(event.position)
 	if event.pressed:
+		scene.bird.disturb(point, 62.0)
 		held_pipe = scene.pipe_at(point)
 		if held_pipe != null:
 			scene.held_pipe = held_pipe
@@ -591,6 +637,7 @@ func opening() -> void:
 		var seam := plug.point + Vector2(plug.radius * 0.78, 0.0)
 		if scene.is_wet(seam):
 			scene.ripples.append(Vector4(seam.x, seam.y, 0.0, 0.18))
+		scene.bird.disturb(scene.to_screen(Vector2(150.0, 0.0)), 140.0)
 		play_knock(1.08)
 
 func advance_gate(dt: float) -> void:
@@ -658,6 +705,7 @@ func update_seep_audio(delta: float, head: float) -> void:
 		seep_cooldown = randf_range(2.8, 4.4)
 
 func on_stone_splash(mass: float, strength: float) -> void:
+	scene.bird.disturb(scene.pointer, 85.0)
 	if stone_splash != null:
 		stone_splash.pitch_scale = lerpf(1.24, 0.78, mass)
 		stone_splash.volume_db = lerpf(-31.0, -23.0, clampf(strength, 0.0, 1.0))
