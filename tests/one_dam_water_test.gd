@@ -42,6 +42,7 @@ func run() -> void:
 	check_time_of_day()
 	check_ecology_links()
 	check_tactile_and_snapshot()
+	check_boat_and_polish()
 	check_music_cycle()
 	game.free()
 	quit(failures)
@@ -1009,6 +1010,53 @@ func check_tactile_and_snapshot() -> void:
 	if FileAccess.file_exists(snap_path):
 		DirAccess.remove_absolute(snap_path)
 	expect(ok_snap, "Snapshot shortcut saves a clean 1280x800 UI-free PNG with viewfinder feedback")
+	game.restart()
+
+func check_boat_and_polish() -> void:
+	game.restart()
+	var view := game.scene
+	var boat := view.boat
+	var home_screen := boat.screen_pos(view.to_screen, Vector2.ZERO)
+	expect(not boat.afloat and view.on_bank(home_screen), "Paper boat starts resting dry by the lower roadside")
+
+	# Grab paper boat and launch it into the creek -> floats downstream and makes a ripple.
+	pointer_button(home_screen, true)
+	expect(boat.held, "Player can pick up the paper boat")
+	var launch_pt := view.to_screen(Vector2(96.0, 0.0))
+	pointer_button(launch_pt, false)
+	var after_drop_x := boat.position.x
+	expect(not boat.held and boat.afloat and not view.ripples.is_empty(),
+		"Dropping the paper boat into the creek floats it with a ripple")
+	frames(120)
+	expect(boat.position.x > after_drop_x + 12.0,
+		"Paper boat sails downstream with the creek current (%.1f -> %.1f)" % [after_drop_x, boat.position.x])
+
+	# Opening title fades in when not dismissed, and dissolves cleanly after first interaction.
+	game.title_dismissed = false
+	game.title_alpha = 0.0
+	frames(70)
+	var shown_alpha := game.title_alpha
+	game.dismiss_title()
+	frames(70)
+	expect(shown_alpha > 0.8 and game.title_alpha < 0.05,
+		"Live-scene opening title fades in gently and dissolves on first interaction")
+
+	# Soft page-turn request_restart transitions through the veil and clears built walls.
+	put(game.model, Vector2(146.0, 0.0), 10.0, Materials.STONE)
+	game.water.rebuild_obstacles(game.model, game.lower)
+	game.request_restart()
+	frames(60)
+	expect(game.model.wall.is_empty() and game.restart_phase == 0 and not boat.afloat,
+		"Soft page-turn restart clears the scene and returns the paper boat to the roadside")
+
+	# Drop forgiveness nudges a stone placed 2px off a crowded neighbor onto a nearby valid spot.
+	var anchor := put(game.model, Vector2(146.0, 0.0), 10.0, Materials.STONE)
+	var candidate := Materials.Piece.new(Vector2(100.0, 60.0), 10.0, Materials.STONE, 1)
+	var tight_cursor := view.to_screen(Vector2(146.0, 9.0))
+	var exact_ok := game.can_drop(candidate, game.drop_point(tight_cursor, null), null)
+	var forgiven := game.resolve_drop(candidate, tight_cursor, null)
+	expect(not exact_ok and bool(forgiven["ok"]) and anchor != null,
+		"Edge drop forgiveness gently snaps tight stone placements onto a valid neighbor spot")
 	game.restart()
 
 func check_music_cycle() -> void:

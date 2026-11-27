@@ -17,6 +17,7 @@ class Piece:
 	var support: Piece
 	var visible_lift := 0.0
 	var fall_speed := 0.0
+	var bounce := 0.0
 
 	func _init(at: Vector2, size: float, material: int, color_index: int) -> void:
 		point = at
@@ -34,6 +35,7 @@ class Piece:
 		return 0.0 if support == null else support.lift() + support.radius * 0.66
 
 	func settle(dt: float) -> void:
+		bounce = move_toward(bounce, 0.0, dt * 4.6)
 		var target := lift()
 		if visible_lift > target:
 			fall_speed += 120.0 * dt
@@ -138,6 +140,7 @@ func place(piece: Piece, point: Vector2, support: Piece) -> void:
 	piece.support = support
 	piece.visible_lift = piece.lift()
 	piece.fall_speed = 0.0
+	piece.bounce = 0.78 if piece.kind == EARTH else 0.42
 	wall.append(piece)
 
 func bracing(piece: Piece) -> float:

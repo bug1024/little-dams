@@ -12,6 +12,7 @@ const GroundInsects = preload("res://game/one_dam_ground_insects.gd")
 const Frog = preload("res://game/one_dam_frog.gd")
 const Crab = preload("res://game/one_dam_crab.gd")
 const Bird = preload("res://game/one_dam_bird.gd")
+const Boat = preload("res://game/one_dam_boat.gd")
 const Hearth = preload("res://game/one_dam_hearth.gd")
 const Scenery = preload("res://game/one_dam_scenery.gd")
 const SIZE := Vector2(320, 200)
@@ -89,6 +90,7 @@ var hovered: Pool.Piece
 var hovered_pipe: Pool.DrainPipe
 var hovered_animal := Vector3.ZERO
 var hovered_hearth := false
+var hovered_boat := false
 var held: Pool.Piece
 var pointer := Vector2.ZERO
 var clear_drop := false
@@ -115,6 +117,7 @@ var ground_insects := GroundInsects.new()
 var frog := Frog.new()
 var crab := Crab.new()
 var bird := Bird.new()
+var boat := Boat.new()
 var wind := Wind.new()
 var rain := Rain.new()
 var hearth := Hearth.new()
@@ -233,6 +236,8 @@ func clear() -> void:
 	frog.reset()
 	crab.reset()
 	bird.reset()
+	boat.reset(from_screen)
+	hovered_boat = false
 	summer.fish_held = false
 	summer.fish_stranded = false
 	summer.fish_released = false
@@ -678,6 +683,11 @@ func advance(dt: float) -> void:
 	advance_surge(dt)
 	advance_riffle(dt)
 	advance_floaters(dt)
+	for piece in bank:
+		piece.bounce = move_toward(piece.bounce, 0.0, dt * 4.6)
+	for piece in riffle:
+		piece.bounce = move_toward(piece.bounce, 0.0, dt * 4.6)
+	boat.advance(dt, water, wind, rain.intensity, surge_at, clear_float_path, can_float_at, is_wet, pipes, boat_ripple)
 	advance_streaks(dt)
 	summer.flower_perches.clear()
 	for item in floaters:
@@ -770,6 +780,9 @@ func bird_spot_wet(point: Vector2) -> bool:
 
 func insect_ripple(point: Vector2) -> void:
 	ripples.append(Vector4(point.x, point.y, 0.0, 0.15))
+
+func boat_ripple(point: Vector2, strength := 0.18) -> void:
+	ripples.append(Vector4(point.x, point.y, 0.0, strength))
 
 func frog_clear(point: Vector2) -> bool:
 	if not summer.cicada_held and point.distance_to(summer.cicada_position) < 7.5:
@@ -997,7 +1010,7 @@ func draw_shore_foreground() -> void:
 	draw_discovery_hints(layer)
 	if hovered_animal.z > 0.0:
 		draw_hover_halo(layer, Vector2(hovered_animal.x, hovered_animal.y), hovered_animal.z, hovered_animal.z * 0.78)
-	if holding_animal() or held != null or held_pipe != null or held_floater != null:
+	if holding_animal() or held != null or held_pipe != null or held_floater != null or boat.held:
 		draw_drop_hint(layer)
 	if snapshot_flash > 0.01:
 		draw_snapshot_frame(layer)
@@ -1192,6 +1205,36 @@ func draw_seams(basin: Pool) -> void:
 			var at := jet + seam_axis * offset + Vector2(0, sin(fleck * 2.0 + clock * 11.0) * 1.9 * force)
 			if is_wet(at):
 				draw_rect(Rect2(snap_pixel(to_screen(at)), Vector2(1.0 + force, 0.5)), Color(FOAM, 0.15 + force * 0.35))
+	draw_dam_tension(basin, center)
+
+func draw_dam_tension(basin: Pool, center: float) -> void:
+	var head := pool_profile(basin, center).y
+	var tension := smoothstep(0.28, 0.56, head)
+	if tension <= 0.04:
+		return
+	for piece in basin.wall:
+		if piece.support != null:
+			continue
+		var up_depth := water.depth_at(piece.point - Vector2(piece.radius * 0.92, 0.0))
+		if up_depth < 0.30:
+			continue
+		var p := piece_screen(piece)
+		var local_t := tension * smoothstep(0.30, 0.56, up_depth)
+		# Delicate overtopping threads trickling across high-pressure dam crests.
+		for i in 2:
+			var phase := fposmod(clock * (1.8 + i * 0.5) + piece.shade * 0.37 + i * 0.43, 1.0)
+			var y_off := (i - 0.5) * piece.radius * 0.52
+			var crest := snap_pixel(p + Vector2(-piece.radius * 0.25, y_off - piece.radius * 0.18))
+			var spill := snap_pixel(p + Vector2(piece.radius * (0.42 + phase * 0.48), y_off + piece.radius * (0.12 + phase * 0.22)))
+			draw_line(crest, spill, Color("#2f5a5a", local_t * 0.42), 1.0)
+			draw_line(crest, spill, foam_ink(local_t * (0.58 - phase * 0.25)), 0.5)
+		# Pressurized seepage bubbles & warm silt wisps at the toe of mud walls.
+		if piece.kind == Pool.EARTH:
+			for b in 2:
+				var bp := fposmod(clock * (1.2 + b * 0.65) + piece.point.y * 0.13 + b * 0.5, 1.0)
+				var toe := snap_pixel(p + Vector2(piece.radius * 0.62 + bp * 4.5, (b - 0.5) * piece.radius * 0.45 + sin(clock * 5.0 + b) * 0.6))
+				draw_rect(Rect2(toe, Vector2(1.5, 0.5)), Color("#6e5e46", local_t * (1.0 - bp) * 0.52))
+				draw_rect(Rect2(toe + Vector2(0.5, -0.5), Vector2(0.75, 0.75)), foam_ink(local_t * sin(bp * PI) * 0.62))
 
 func draw_breach_jet(event: Breach) -> void:
 	if event == null or event.strength < 0.035 or event.phase not in [Breach.Phase.OPENING, Breach.Phase.JET]:
@@ -1388,6 +1431,13 @@ func draw_drop_hint(canvas: Node2D) -> void:
 				Color("#f2dfb2", 0.76), Color("#1c2924a8"), 10)
 		else:
 			draw_cross_badge(canvas, pointer + Vector2(0, 2.0))
+	elif boat.held:
+		if clear_drop:
+			var in_water := is_wet(from_screen(pointer)) and not on_bank(pointer)
+			var ring := Color("#c7f2df", 0.84) if in_water else Color("#f2dfb2", 0.78)
+			draw_dashed_ellipse(canvas, snap_pixel(pointer + Vector2(0, 2.0)), 6.5, 3.2, ring, Color("#1c2924a8"), 12)
+		else:
+			draw_cross_badge(canvas, pointer + Vector2(0, 2.0))
 
 func draw_hover_halo(canvas: Node2D, center: Vector2, rx: float, ry: float, tint := PAPER) -> void:
 	var pulse := 0.72 + 0.28 * sin(clock * 4.5)
@@ -1499,6 +1549,9 @@ func draw_floaters() -> void:
 				draw_line(snap_pixel(rib), snap_pixel(rib + Vector2(1.2, 1.3).rotated(item.angle)), shade_color(leaf_top.darkened(0.22), point), 0.5)
 		if item == hovered_floater and held_floater == null:
 			draw_hover_halo(self, point, 7.5, 5.5)
+	boat.draw(self, to_screen, pointer, shade_color, foam_ink())
+	if hovered_boat and not boat.held:
+		draw_hover_halo(self, boat.screen_pos(to_screen, pointer), 7.5, 4.8)
 
 func forage_screen(item: Floater) -> Vector2:
 	return piece_screen(item.host) + item.host_offset if item.host != null else to_screen(item.point)
@@ -1665,6 +1718,7 @@ func make_hearth_warm_face(stone: Pool.Piece) -> ImageTexture:
 func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersion: float, seated: bool, squash: float,
 		firelight := 0.0) -> void:
 	var is_earth := piece.kind == Pool.EARTH
+	squash *= 1.0 - sin(piece.bounce * PI) * (0.16 if is_earth else 0.08)
 	var r := piece.radius
 	var wear_scale := (1.0 - piece.wear * 0.30) if is_earth else 1.0
 	var seed := fposmod(piece.radius * 0.317 + piece.shade * 0.247, 1.0)

@@ -11,6 +11,7 @@ const PIXELS := Vector2i(640, 400)
 const SCALE := 4.0
 const DETAIL := 2.0
 const STEP := Flow.STEP
+const TITLE_TEXT := "小沟"
 
 @export_group("近景水流调试")
 @export_range(1, 4) var creek_pace := 3
@@ -33,6 +34,12 @@ var music_button := Button.new()
 var last_day_stage := 0
 var hud_actions: HBoxContainer
 var hud_idle := 0.0
+var title_box: Control
+var title_alpha := 0.0
+var title_dismissed := false
+var page_veil: ColorRect
+var restart_phase := 0
+var restart_fade := 0.0
 var controls_art := Controls.new()
 var music_director := MusicDirector.new()
 var music_enabled := true
@@ -97,6 +104,7 @@ func _ready() -> void:
 	add_child(picture)
 
 	build_controls()
+	build_overlays()
 	creek = audio("res://game/one_dam_audio/shallows.wav", -2.0, true)
 	music = music_director.setup(self, can_play_audio())
 	audio("res://game/one_dam_audio/july_bank.wav", -12.5, true)
@@ -224,7 +232,7 @@ func build_controls() -> void:
 	var reset := Button.new()
 	controls_art.configure(gate, "放水", Controls.Action.RELEASE, opening, "空格")
 	gate.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
-	controls_art.configure(reset, "重来", Controls.Action.RESTART, restart, "R")
+	controls_art.configure(reset, "重来", Controls.Action.RESTART, request_restart, "R")
 	controls_art.configure(rain_button, "下雨", Controls.Action.RAIN, toggle_rain)
 	controls_art.configure(time_button, "午后", Controls.Action.TIME, cycle_time, "T")
 	controls_art.configure(music_button, "音乐开", Controls.Action.MUSIC, toggle_music)
@@ -241,7 +249,75 @@ func build_controls() -> void:
 	actions.offset_right = -margin.x
 	actions.offset_bottom = -margin.y
 
+func build_overlays() -> void:
+	var veil_layer := CanvasLayer.new()
+	veil_layer.layer = 5
+	add_child(veil_layer)
+
+	# Seamless live-scene opening title that dissolves softly on the player's first interaction.
+	var box := VBoxContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 10)
+	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	box.offset_left = -220
+	box.offset_right = 220
+	box.offset_top = 86
+	box.offset_bottom = 220
+	var title_font := SystemFont.new()
+	title_font.font_names = PackedStringArray(["PingFang SC", "Hiragino Sans GB", "Songti SC", "Microsoft YaHei", "Noto Sans CJK SC", "sans-serif"])
+	title_font.font_weight = 500
+	var heading := Label.new()
+	heading.text = TITLE_TEXT
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	heading.add_theme_font_override("font", title_font)
+	heading.add_theme_font_size_override("font_size", 58)
+	heading.add_theme_color_override("font_color", Color("#fff4d8"))
+	heading.add_theme_color_override("font_shadow_color", Color(0.11, 0.11, 0.08, 0.72))
+	heading.add_theme_constant_override("shadow_offset_x", 2)
+	heading.add_theme_constant_override("shadow_offset_y", 3)
+	heading.add_theme_constant_override("shadow_outline_size", 4)
+	box.add_child(heading)
+	var rule_wrap := CenterContainer.new()
+	rule_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var rule := ColorRect.new()
+	rule.custom_minimum_size = Vector2(92, 2)
+	rule.color = Color(0.95, 0.87, 0.67, 0.72)
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rule_wrap.add_child(rule)
+	box.add_child(rule_wrap)
+	box.modulate.a = 0.0
+	veil_layer.add_child(box)
+	title_box = box
+	title_dismissed = DisplayServer.get_name() == "headless"
+
+	# Warm parchment page-turn veil for gentle "重来" transitions.
+	page_veil = ColorRect.new()
+	page_veil.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	page_veil.color = Color(0.94, 0.89, 0.80, 0.0)
+	page_veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	veil_layer.add_child(page_veil)
+
+func dismiss_title() -> void:
+	title_dismissed = true
+
+func request_restart() -> void:
+	dismiss_title()
+	if restart_phase == 1:
+		return
+	restart_phase = 1
+	play_foley(forage_audio, 0.82, 0.92)
+
+func toggle_fullscreen() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var current_mode := DisplayServer.window_get_mode()
+	var next_mode := DisplayServer.WINDOW_MODE_WINDOWED if current_mode in [DisplayServer.WINDOW_MODE_FULLSCREEN, DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN] else DisplayServer.WINDOW_MODE_FULLSCREEN
+	DisplayServer.window_set_mode(next_mode)
+
 func cycle_time() -> void:
+	dismiss_title()
 	hud_idle = 0.0
 	var next_stage := (scene.current_day_stage() + 1) % 3
 	scene.set_day_stage(next_stage)
@@ -249,6 +325,7 @@ func cycle_time() -> void:
 	controls_art.set_time_stage(time_button, next_stage)
 
 func toggle_music() -> void:
+	dismiss_title()
 	hud_idle = 0.0
 	music_enabled = not music_enabled
 	music_director.set_enabled(music_enabled)
@@ -333,6 +410,7 @@ func restart() -> void:
 	gate.disabled = true
 
 func toggle_rain() -> void:
+	dismiss_title()
 	hud_idle = 0.0
 	scene.rain.enabled = not scene.rain.enabled
 	rain_button.text = "停雨" if scene.rain.enabled else "下雨"
@@ -358,6 +436,22 @@ func _process(delta: float) -> void:
 		lower_breach.advance(STEP, water)
 		lag -= STEP
 	scene.advance(delta)
+	if title_box != null:
+		var title_target := 0.0 if title_dismissed else 1.0
+		title_alpha = move_toward(title_alpha, title_target, delta * (1.25 if title_dismissed else 0.95))
+		title_box.modulate.a = title_alpha * title_alpha * (3.0 - 2.0 * title_alpha)
+		title_box.visible = title_alpha > 0.005
+	if restart_phase == 1:
+		restart_fade = move_toward(restart_fade, 1.0, delta * 4.6)
+		if restart_fade >= 1.0:
+			restart()
+			restart_phase = 2
+	elif restart_phase == 2:
+		restart_fade = move_toward(restart_fade, 0.0, delta * 3.2)
+		if restart_fade <= 0.0:
+			restart_phase = 0
+	if page_veil != null:
+		page_veil.color.a = restart_fade * 0.88
 	var screen_mouse := get_global_mouse_position()
 	if (screen_mouse.x > 540.0 and screen_mouse.y > 650.0) or get_viewport().gui_get_hovered_control() != null:
 		hud_idle = 0.0
@@ -431,7 +525,8 @@ func update_hover(pointer: Vector2) -> void:
 	scene.hovered_pipe = null
 	scene.hovered_animal = Vector3.ZERO
 	scene.hovered_hearth = false
-	if held != null or held_floater != null or held_pipe != null or scene.holding_animal():
+	scene.hovered_boat = false
+	if held != null or held_floater != null or held_pipe != null or scene.holding_animal() or scene.boat.held:
 		return
 	if get_viewport().gui_get_hovered_control() != null:
 		return
@@ -442,6 +537,9 @@ func update_hover(pointer: Vector2) -> void:
 	var animal := scene.animal_hover_target(pointer)
 	if animal.z > 0.0:
 		scene.hovered_animal = animal
+		return
+	if scene.boat.hit_test(pointer, scene.to_screen, pointer):
+		scene.hovered_boat = true
 		return
 	if scene.hearth.contains(pointer) and scene.hearth.can_ignite():
 		scene.hovered_hearth = true
@@ -470,14 +568,18 @@ func find_piece(point: Vector2) -> Pool.Piece:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
-		if held != null or held_floater != null or held_pipe != null or scene.holding_animal():
+		if held != null or held_floater != null or held_pipe != null or scene.holding_animal() or scene.boat.held:
 			_unhandled_input(event)
 			get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
+		if event.physical_keycode == KEY_F11 or (event.alt_pressed and event.physical_keycode == KEY_ENTER):
+			toggle_fullscreen()
+			return
+		dismiss_title()
 		if event.physical_keycode == KEY_R:
-			restart()
+			request_restart()
 		elif event.physical_keycode == KEY_ESCAPE:
 			cancel_grab()
 		elif event.physical_keycode in [KEY_ENTER, KEY_SPACE]:
@@ -489,7 +591,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion:
 		var pointer := stage_pointer(event.position)
-		if held != null or held_floater != null or held_pipe != null or scene.holding_animal():
+		if held != null or held_floater != null or held_pipe != null or scene.holding_animal() or scene.boat.held:
 			update_grab(pointer)
 		else:
 			scene.summer.disturb_perch(pointer)
@@ -500,6 +602,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var point := stage_pointer(event.position)
 	if event.pressed:
+		dismiss_title()
 		scene.bird.disturb(point, 62.0)
 		held_pipe = scene.pipe_at(point)
 		if held_pipe != null:
@@ -511,6 +614,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			update_grab(point)
 			return
 		if scene.grab_animal(point):
+			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
+			update_grab(point)
+			return
+		if scene.boat.hit_test(point, scene.to_screen, point):
+			scene.boat.held = true
+			play_foley(forage_audio, 1.04, 1.16)
 			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 			update_grab(point)
 			return
@@ -555,6 +664,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		scene.place_animal(point)
 		cancel_grab()
 		return
+	if scene.boat.held:
+		if Rect2(Vector2(4.0, 4.0), View.SIZE - Vector2(8.0, 8.0)).has_point(point):
+			var local := scene.from_screen(point)
+			var wet := scene.is_wet(local) and not scene.on_bank(point)
+			scene.boat.place(point, scene.from_screen, wet)
+			if wet:
+				scene.burst(local, 0.22)
+				play_foley(forage_audio, 0.90, 1.02)
+			else:
+				play_foley(forage_audio, 1.02, 1.14)
+		cancel_grab()
+		return
 	if held_floater != null:
 		var item := held_floater
 		var count_before := scene.floaters.size()
@@ -574,8 +695,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		source.remove(held, force)
 	elif grab.distance_to(point) >= 5.0:
 		var support := support_at(point, held)
-		var target := drop_point(point, support)
-		if can_drop(held, target, support):
+		var resolved := resolve_drop(held, point, support)
+		if bool(resolved["ok"]):
+			var target: Vector2 = resolved["target"]
 			var target_pool := pool_for(target.x)
 			pool_for(held.point.x).detach(held)
 			scene.bank.erase(held)
@@ -594,6 +716,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			held.point = scene.from_screen(point)
 			held.visible_lift = 0.0
 			held.notch = 0.0
+			held.bounce = 0.72 if held.kind == Pool.EARTH else 0.38
 			if not scene.bank.has(held):
 				scene.bank.append(held)
 			if held.kind == Pool.EARTH:
@@ -691,6 +814,10 @@ func update_grab(point: Vector2) -> void:
 		scene.clear_drop = scene.can_place_animal(point)
 		scene.preview_active = true
 		return
+	if scene.boat.held:
+		scene.clear_drop = Rect2(Vector2(4.0, 4.0), View.SIZE - Vector2(8.0, 8.0)).has_point(point)
+		scene.preview_active = true
+		return
 	if held_floater != null:
 		scene.clear_drop = scene.can_place_floater(held_floater, point)
 		scene.preview_active = true
@@ -698,10 +825,11 @@ func update_grab(point: Vector2) -> void:
 	if held == null:
 		return
 	var support := support_at(point, held)
-	var target := drop_point(point, support)
+	var resolved := resolve_drop(held, point, support)
+	var target: Vector2 = resolved["target"]
 	var dragged := grab.distance_to(point) >= 5.0
 	scene.pry_mode = not from_bank and not dragged
-	var valid_water := dragged and can_drop(held, target, support)
+	var valid_water := dragged and bool(resolved["ok"])
 	var valid_bank := dragged and can_return_to_bank(point)
 	scene.clear_drop = valid_water or valid_bank
 	scene.preview_support = support if valid_water else null
@@ -717,6 +845,7 @@ func cancel_grab() -> void:
 	scene.held = null
 	held_floater = null
 	scene.held_floater = null
+	scene.boat.held = false
 	scene.preview_support = null
 	scene.preview_pipe_host = null
 	scene.preview_bank_drop = false
@@ -729,6 +858,19 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 		cancel_grab()
 
+func resolve_drop(piece: Pool.Piece, cursor: Vector2, support: Pool.Piece = null) -> Dictionary:
+	var exact := drop_point(cursor, support)
+	if can_drop(piece, exact, support):
+		return {"ok": true, "target": exact}
+	if support == null:
+		for radius: float in [2.5, 4.5]:
+			for step_idx in 8:
+				var a := float(step_idx) * TAU / 8.0
+				var probe := drop_point(cursor + Vector2(cos(a), sin(a)) * radius, null)
+				if can_drop(piece, probe, null):
+					return {"ok": true, "target": probe}
+	return {"ok": false, "target": exact}
+
 func can_drop(piece: Pool.Piece, target: Vector2, support: Pool.Piece = null) -> bool:
 	var contact := scene.to_screen(target)
 	return Rect2(Vector2.ZERO, View.SIZE).has_point(contact) and absf(target.y) <= Pool.BANK + 4.0 and (
@@ -738,6 +880,7 @@ func can_return_to_bank(cursor: Vector2) -> bool:
 	return Rect2(Vector2.ZERO, View.SIZE).has_point(cursor) and scene.on_bank(cursor)
 
 func opening() -> void:
+	dismiss_title()
 	hud_idle = 0.0
 	if gate_plug != null:
 		finish_gate()
@@ -826,11 +969,12 @@ func update_seep_audio(delta: float, head: float) -> void:
 		return
 	var basin := model if not model.wall.is_empty() else lower
 	var seep := water.gap_flow(Vector2(basin.center(146.0), 0.0))
-	if seep > 0.09:
-		seep_audio.pitch_scale = 0.93
-		seep_audio.volume_db = lerpf(-44.0, -38.0, smoothstep(0.09, 0.80, seep))
+	var high_pressure := smoothstep(0.35, 0.62, head)
+	if seep > 0.09 or high_pressure > 0.35:
+		seep_audio.pitch_scale = lerpf(0.95, 0.80, high_pressure)
+		seep_audio.volume_db = lerpf(-43.0, -35.0, maxf(smoothstep(0.09, 0.80, seep), high_pressure * 0.85))
 		seep_audio.play()
-		seep_cooldown = randf_range(2.8, 4.4)
+		seep_cooldown = randf_range(lerpf(2.8, 1.8, high_pressure), lerpf(4.4, 3.0, high_pressure))
 
 func on_stone_splash(mass: float, strength: float) -> void:
 	scene.bird.disturb(scene.pointer, 85.0)
