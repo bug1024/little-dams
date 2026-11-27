@@ -5,6 +5,7 @@ const Flow = preload("res://game/one_dam_grid.gd")
 const Breach = preload("res://game/one_dam_breach.gd")
 const View = preload("res://game/one_dam_view.gd")
 const Controls = preload("res://game/one_dam_controls.gd")
+const TitleArt = preload("res://game/one_dam_title_art.gd")
 const WaterAudio = preload("res://game/one_dam_water_audio.gd")
 const MusicDirector = preload("res://game/one_dam_music.gd")
 const PIXELS := Vector2i(640, 400)
@@ -62,6 +63,8 @@ var pipe_audio: AudioStreamPlayer
 var ignite_audio: AudioStreamPlayer
 var shutter_audio: AudioStreamPlayer
 var hearth_audio: AudioStreamPlayer
+var squirt_draw_audio: AudioStreamPlayer
+var squirt_jet_audio: AudioStreamPlayer
 var last_snapshot_path := ""
 var held: Pool.Piece
 var held_floater: View.Floater
@@ -175,6 +178,14 @@ func _ready() -> void:
 		hearth_audio.stream = WaterAudio.hearth_fire()
 		hearth_audio.volume_db = -60.0
 		add_child(hearth_audio)
+		squirt_draw_audio = AudioStreamPlayer.new()
+		squirt_draw_audio.stream = WaterAudio.squirt_draw()
+		squirt_draw_audio.volume_db = -60.0
+		add_child(squirt_draw_audio)
+		squirt_jet_audio = AudioStreamPlayer.new()
+		squirt_jet_audio.stream = WaterAudio.squirt_jet()
+		squirt_jet_audio.volume_db = -60.0
+		add_child(squirt_jet_audio)
 	model.released.connect(on_released.bind(false))
 	lower.released.connect(on_released.bind(true))
 	model.landed.connect(scene.support_impact)
@@ -254,42 +265,22 @@ func build_overlays() -> void:
 	veil_layer.layer = 5
 	add_child(veil_layer)
 
-	# Seamless live-scene opening title that dissolves softly on the player's first interaction.
-	var box := VBoxContainer.new()
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", 10)
-	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
-	box.offset_left = -220
-	box.offset_right = 220
-	box.offset_top = 86
-	box.offset_bottom = 220
-	var title_font := SystemFont.new()
-	title_font.font_names = PackedStringArray(["PingFang SC", "Hiragino Sans GB", "Songti SC", "Microsoft YaHei", "Noto Sans CJK SC", "sans-serif"])
-	title_font.font_weight = 500
-	var heading := Label.new()
-	heading.text = TITLE_TEXT
-	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	heading.add_theme_font_override("font", title_font)
-	heading.add_theme_font_size_override("font_size", 58)
-	heading.add_theme_color_override("font_color", Color("#fff4d8"))
-	heading.add_theme_color_override("font_shadow_color", Color(0.11, 0.11, 0.08, 0.72))
-	heading.add_theme_constant_override("shadow_offset_x", 2)
-	heading.add_theme_constant_override("shadow_offset_y", 3)
-	heading.add_theme_constant_override("shadow_outline_size", 4)
-	box.add_child(heading)
-	var rule_wrap := CenterContainer.new()
-	rule_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var rule := ColorRect.new()
-	rule.custom_minimum_size = Vector2(92, 2)
-	rule.color = Color(0.95, 0.87, 0.67, 0.72)
-	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rule_wrap.add_child(rule)
-	box.add_child(rule_wrap)
-	box.modulate.a = 0.0
-	veil_layer.add_child(box)
-	title_box = box
+	# Seamless live-scene opening title crafted on the same 2x pixel grid as the creek.
+	var title_art := TitleArt.new()
+	var emblem := TextureRect.new()
+	emblem.texture = title_art.make_title_texture(TITLE_TEXT)
+	emblem.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	emblem.stretch_mode = TextureRect.STRETCH_KEEP
+	emblem.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var emblem_size := emblem.texture.get_size()
+	emblem.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	emblem.offset_left = -floorf(emblem_size.x * 0.5)
+	emblem.offset_right = ceilf(emblem_size.x * 0.5)
+	emblem.offset_top = 24.0
+	emblem.offset_bottom = 24.0 + emblem_size.y
+	emblem.modulate.a = 0.0
+	veil_layer.add_child(emblem)
+	title_box = emblem
 	title_dismissed = DisplayServer.get_name() == "headless"
 
 	# Warm parchment page-turn veil for gentle "重来" transitions.
@@ -385,6 +376,10 @@ func restart() -> void:
 		shutter_audio.stop()
 	if hearth_audio != null:
 		hearth_audio.stop()
+	if squirt_draw_audio != null:
+		squirt_draw_audio.stop()
+	if squirt_jet_audio != null:
+		squirt_jet_audio.stop()
 	upper_breach.reset()
 	lower_breach.reset()
 	cancel_grab()
@@ -518,6 +513,25 @@ func _process(delta: float) -> void:
 			pipe_audio.pitch_scale = lerpf(0.92, 1.12, pipe_level)
 		elif pipe_audio.playing:
 			pipe_audio.stop()
+	if squirt_draw_audio != null:
+		if scene.squirt_gun.drawing:
+			if not squirt_draw_audio.playing:
+				squirt_draw_audio.volume_db = -60.0
+				squirt_draw_audio.play()
+			squirt_draw_audio.volume_db = lerpf(squirt_draw_audio.volume_db, -20.5, 1.0 - exp(-delta * 16.0))
+			squirt_draw_audio.pitch_scale = lerpf(0.86, 1.26, scene.squirt_gun.water_fill)
+		elif squirt_draw_audio.playing:
+			squirt_draw_audio.stop()
+	if squirt_jet_audio != null:
+		if scene.squirt_gun.firing and scene.squirt_gun.water_fill > 0.01:
+			if not squirt_jet_audio.playing:
+				squirt_jet_audio.volume_db = -60.0
+				squirt_jet_audio.play()
+			var jet_db := -18.5 + linear_to_db(clampf(0.42 + scene.squirt_gun.water_fill * 0.58, 0.01, 1.0))
+			squirt_jet_audio.volume_db = lerpf(squirt_jet_audio.volume_db, jet_db, 1.0 - exp(-delta * 18.0))
+			squirt_jet_audio.pitch_scale = lerpf(0.88, 1.15, clampf(scene.squirt_gun.aim_distance / 210.0, 0.0, 1.0))
+		elif squirt_jet_audio.playing:
+			squirt_jet_audio.stop()
 
 func update_hover(pointer: Vector2) -> void:
 	scene.hovered = null
@@ -526,7 +540,8 @@ func update_hover(pointer: Vector2) -> void:
 	scene.hovered_animal = Vector3.ZERO
 	scene.hovered_hearth = false
 	scene.hovered_boat = false
-	if held != null or held_floater != null or held_pipe != null or scene.holding_animal() or scene.boat.held:
+	scene.hovered_squirt_gun = false
+	if held != null or held_floater != null or held_pipe != null or scene.holding_animal() or scene.boat.held or scene.squirt_gun.held:
 		return
 	if get_viewport().gui_get_hovered_control() != null:
 		return
@@ -540,6 +555,9 @@ func update_hover(pointer: Vector2) -> void:
 		return
 	if scene.boat.hit_test(pointer, scene.to_screen, pointer):
 		scene.hovered_boat = true
+		return
+	if scene.squirt_gun.hit_test(pointer):
+		scene.hovered_squirt_gun = true
 		return
 	if scene.hearth.contains(pointer) and scene.hearth.can_ignite():
 		scene.hovered_hearth = true
@@ -591,18 +609,39 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion:
 		var pointer := stage_pointer(event.position)
-		if held != null or held_floater != null or held_pipe != null or scene.holding_animal() or scene.boat.held:
+		if held != null or held_floater != null or held_pipe != null or scene.holding_animal() or scene.boat.held or scene.squirt_gun.held:
 			update_grab(pointer)
 		else:
 			scene.summer.disturb_perch(pointer)
 		return
 	if event is not InputEventMouseButton:
 		return
+	var point := stage_pointer(event.position)
+	if event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed and scene.squirt_gun.held:
+			scene.squirt_gun.put_down(point, can_return_to_bank(point))
+			scene.squirt_mouse_down = false
+			play_foley(bamboo_audio, 0.92, 1.04)
+			Input.set_default_cursor_shape(Input.CURSOR_ARROW)
+		return
 	if event.button_index != MOUSE_BUTTON_LEFT:
 		return
-	var point := stage_pointer(event.position)
 	if event.pressed:
 		dismiss_title()
+		if scene.squirt_gun.held:
+			scene.pointer = point
+			scene.squirt_mouse_down = true
+			var nozzle_wet := scene.screen_in_water(point) or scene.screen_in_water(scene.squirt_gun.nozzle_pos(point))
+			if scene.squirt_gun.water_fill < 0.05 and not nozzle_wet and can_return_to_bank(point):
+				scene.squirt_gun.put_down(point, true)
+				scene.squirt_mouse_down = false
+				play_foley(bamboo_audio, 0.92, 1.04)
+				Input.set_default_cursor_shape(Input.CURSOR_ARROW)
+				return
+			var outcome := scene.squirt_gun.begin_trigger(point, nozzle_wet)
+			if outcome == "dry":
+				play_foley(bamboo_audio, 1.12, 1.24)
+			return
 		scene.bird.disturb(point, 62.0)
 		held_pipe = scene.pipe_at(point)
 		if held_pipe != null:
@@ -620,6 +659,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		if scene.boat.hit_test(point, scene.to_screen, point):
 			scene.boat.held = true
 			play_foley(forage_audio, 1.04, 1.16)
+			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
+			update_grab(point)
+			return
+		if scene.squirt_gun.hit_test(point):
+			scene.squirt_gun.pickup(point)
+			scene.squirt_mouse_down = true
+			play_foley(bamboo_audio, 1.00, 1.12)
 			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 			update_grab(point)
 			return
@@ -642,6 +688,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			if forage != null:
 				begin_floater_grab(forage, point)
+		return
+	if scene.squirt_gun.held:
+		scene.squirt_mouse_down = false
+		scene.squirt_gun.end_trigger()
 		return
 	if held_pipe != null:
 		var host := pipe_host_at(point)
@@ -818,6 +868,8 @@ func update_grab(point: Vector2) -> void:
 		scene.clear_drop = Rect2(Vector2(4.0, 4.0), View.SIZE - Vector2(8.0, 8.0)).has_point(point)
 		scene.preview_active = true
 		return
+	if scene.squirt_gun.held:
+		return
 	if held_floater != null:
 		scene.clear_drop = scene.can_place_floater(held_floater, point)
 		scene.preview_active = true
@@ -846,6 +898,9 @@ func cancel_grab() -> void:
 	held_floater = null
 	scene.held_floater = null
 	scene.boat.held = false
+	if scene.squirt_gun.held:
+		scene.squirt_gun.put_down(scene.pointer, can_return_to_bank(scene.pointer))
+	scene.squirt_mouse_down = false
 	scene.preview_support = null
 	scene.preview_pipe_host = null
 	scene.preview_bank_drop = false

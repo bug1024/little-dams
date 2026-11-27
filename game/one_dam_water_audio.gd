@@ -440,3 +440,93 @@ static func water_cue(cue: Cue) -> AudioStreamWAV:
 	stream.mix_rate = rate
 	stream.data = samples
 	return stream
+
+static func squirt_draw() -> AudioStreamWAV:
+	const RATE := 22050
+	const FRAMES := roundi(RATE * 1.4)
+	const FADE := 2400
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7129
+	var buffer := PackedFloat32Array()
+	buffer.resize(FRAMES + FADE)
+	var low := 0.0
+	var mid := 0.0
+	var bub_amp := 0.0
+	var bub_phase := 0.0
+	var bub_f0 := 340.0
+	var bub_f1 := 760.0
+	var bub_age := 0.0
+	var tube_phase := 0.0
+	for i in buffer.size():
+		var white := rng.randf_range(-1.0, 1.0)
+		low += (white - low) * 0.19
+		mid += (low - mid) * 0.06
+		if rng.randf() < 0.0028:
+			bub_amp = rng.randf_range(0.28, 0.62)
+			bub_phase = 0.0
+			bub_age = 0.0
+			bub_f0 = rng.randf_range(290.0, 480.0)
+			bub_f1 = bub_f0 * rng.randf_range(1.65, 2.25)
+		bub_age = minf(1.0, bub_age + 1.0 / (RATE * 0.048))
+		bub_phase += TAU * lerpf(bub_f0, bub_f1, bub_age) / RATE
+		bub_amp *= 0.9945
+		tube_phase += TAU * 365.0 / RATE
+		var suction := (low - mid) * 0.95
+		var slurp := sin(bub_phase) * bub_amp * 0.55 + sin(tube_phase) * (low - mid) * 0.35
+		buffer[i] = suction + slurp
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	for i in FRAMES:
+		var value := buffer[i]
+		if i < FADE:
+			value = lerpf(buffer[FRAMES + i], value, smoothstep(0.0, 1.0, float(i) / FADE))
+		samples.encode_s16(i * 2, clampi(roundi(value * 16500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_end = FRAMES
+	return stream
+
+static func squirt_jet() -> AudioStreamWAV:
+	const RATE := 22050
+	const FRAMES := roundi(RATE * 1.6)
+	const FADE := 2600
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7307
+	var buffer := PackedFloat32Array()
+	buffer.resize(FRAMES + FADE)
+	var hp_prev := 0.0
+	var hiss := 0.0
+	var body := 0.0
+	var spray_amp := 0.0
+	var spray_phase := 0.0
+	var spray_freq := 1600.0
+	for i in buffer.size():
+		var white := rng.randf_range(-1.0, 1.0)
+		var hp := white - hp_prev * 0.72
+		hp_prev = white
+		hiss += (hp - hiss) * 0.48
+		body += (white - body) * 0.16
+		if rng.randf() < 0.0042:
+			spray_amp = rng.randf_range(0.14, 0.36)
+			spray_phase = 0.0
+			spray_freq = rng.randf_range(1250.0, 2650.0)
+		spray_phase += TAU * spray_freq / RATE
+		spray_amp *= 0.990
+		buffer[i] = hiss * 0.68 + body * 0.36 + sin(spray_phase) * spray_amp * 0.35
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	for i in FRAMES:
+		var value := buffer[i]
+		if i < FADE:
+			value = lerpf(buffer[FRAMES + i], value, smoothstep(0.0, 1.0, float(i) / FADE))
+		samples.encode_s16(i * 2, clampi(roundi(value * 15500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_end = FRAMES
+	return stream

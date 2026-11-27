@@ -56,6 +56,13 @@ func place(cursor: Vector2, unproject: Callable, wet: bool) -> void:
 		bob = 0.0
 		roll = 0.0
 
+func nudge(impulse: Vector2) -> void:
+	if not afloat or held:
+		return
+	drift = (drift + impulse).limit_length(82.0)
+	roll = clampf(roll + signf(impulse.x) * 0.14, -0.34, 0.34)
+	bob = minf(bob + 0.35, 1.2)
+
 func advance(dt: float, water, wind: Wind, rain_intensity: float, surge_fn: Callable,
 		clear_path_fn: Callable, can_float_fn: Callable, is_wet_fn: Callable,
 		pipes: Array, ripple_fn: Callable) -> void:

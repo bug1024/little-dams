@@ -43,6 +43,7 @@ func run() -> void:
 	check_ecology_links()
 	check_tactile_and_snapshot()
 	check_boat_and_polish()
+	check_squirt_gun()
 	check_music_cycle()
 	game.free()
 	quit(failures)
@@ -558,6 +559,9 @@ func check_insect_drag() -> void:
 	game.restart()
 	var view := game.scene
 	var insects := view.ground_insects
+	insects.rng.seed = 1091
+	view.frog.rng.seed = 1091
+	view.crab.rng.seed = 1091
 	var pond := view.to_screen(Vector2(153, 0))
 	pointer_button(insects.mantis.position, true)
 	expect(insects.held == insects.mantis, "Mouse grabs the mantis")
@@ -1058,6 +1062,103 @@ func check_boat_and_polish() -> void:
 	expect(not exact_ok and bool(forgiven["ok"]) and anchor != null,
 		"Edge drop forgiveness gently snaps tight stone placements onto a valid neighbor spot")
 	game.restart()
+
+func check_squirt_gun() -> void:
+	game.restart()
+	var view := game.scene
+	var gun := view.squirt_gun
+	expect(not gun.held and gun.water_fill == 0.0 and view.on_bank(gun.position),
+		"Bamboo water gun starts empty on the sunny lower roadside")
+
+	# Clicking picks up the gun; while empty it reveals a zero-text creek water glimmer.
+	pointer_button(gun.position, true)
+	pointer_button(gun.position, false)
+	expect(gun.held and view.has_discovery_hint(),
+		"Player picks up the bamboo water gun and sees the zero-text creek fill hint when empty")
+
+	# Dipping the held gun into the creek draws water and pulls back the wooden plunger.
+	var dip_pt := view.to_screen(Vector2(118.0, 2.0))
+	view.pointer = dip_pt
+	var saw_drawing := false
+	for i in 70:
+		view.advance(1.0 / 60.0)
+		if gun.drawing:
+			saw_drawing = true
+	expect(saw_drawing and gun.water_fill >= 0.95 and gun.plunger >= 0.85 and not view.ripples.is_empty(),
+		"Dipping the bamboo water gun in the creek draws water and extends the plunger (%.2f)" % gun.water_fill)
+
+	# Firing shoots a long-range arching water stream across the creek (over 120 stage px reach).
+	var stand_pt := Vector2(76.0, 166.0)
+	var far_target := Vector2(246.0, 110.0)
+	view.pointer = stand_pt
+	var outcome := gun.begin_trigger(stand_pt, false)
+	view.pointer = far_target
+	var max_reach := 0.0
+	var saw_splash := false
+	for i in 75:
+		view.advance(1.0 / 60.0)
+		for d in gun.drops:
+			max_reach = maxf(max_reach, d.pos.distance_to(stand_pt))
+		for sp in gun.splashes:
+			max_reach = maxf(max_reach, sp.pos.distance_to(stand_pt))
+			saw_splash = true
+	expect(outcome == "fire" and max_reach >= 120.0 and saw_splash and gun.water_fill < 0.70,
+		"Bamboo water gun shoots a long-range arching stream across the creek (reach %.1f px)" % max_reach)
+	gun.end_trigger()
+
+	# Spraying a lit campfire douses it, raising dampness and cooling the flames.
+	view.hearth.wood = 2.0
+	view.hearth.grass = 1.0
+	view.hearth.ignite()
+	for i in 25:
+		view.advance(1.0 / 60.0)
+	var heat_before := view.hearth.heat
+	gun.water_fill = 1.0
+	var fire_stand := Vector2(126.0, 162.0)
+	view.pointer = fire_stand
+	gun.begin_trigger(fire_stand, false)
+	view.pointer = Hearth.CENTER
+	for i in 80:
+		view.advance(1.0 / 60.0)
+	gun.end_trigger()
+	expect(view.hearth.dampness > 0.25 and view.hearth.heat < heat_before,
+		"Water gun stream reaches and douses the campfire (dampness %.2f)" % view.hearth.dampness)
+
+	# Spraying behind a floating paper boat nudges it forward with the jet.
+	view.boat.place(view.to_screen(Vector2(170.0, 0.0)), view.from_screen, true)
+	view.boat.drift = Vector2.ZERO
+	gun.water_fill = 1.0
+	var boat_stand := Vector2(88.0, 146.0)
+	var boat_screen := view.boat.screen_pos(view.to_screen, Vector2.ZERO)
+	view.pointer = boat_stand
+	gun.begin_trigger(boat_stand, false)
+	view.pointer = boat_screen
+	var peak_drift_x := 0.0
+	for i in 75:
+		view.advance(1.0 / 60.0)
+		peak_drift_x = maxf(peak_drift_x, view.boat.drift.x)
+	gun.end_trigger()
+	expect(peak_drift_x > 16.0, "Water gun jet splashes and pushes the floating paper boat (drift_x %.1f)" % peak_drift_x)
+
+	# Right-clicking sets the gun back down cleanly on dry bank; audio streams synthesize cleanly.
+	var right_press := InputEventMouseButton.new()
+	right_press.button_index = MOUSE_BUTTON_RIGHT
+	right_press.pressed = true
+	right_press.position = Vector2(128.0, 184.0) * OneDam.SCALE
+	game._unhandled_input(right_press)
+	var audio_ok := true
+	for wav: AudioStreamWAV in [game.WaterAudio.squirt_draw(), game.WaterAudio.squirt_jet()]:
+		var n := wav.data.size() / 2
+		var peak := 0
+		for i in n:
+			peak = maxi(peak, absi(wav.data.decode_s16(i * 2)))
+		if n < 10000 or peak < 800 or peak > 32767:
+			audio_ok = false
+	expect(not gun.held and view.on_bank(gun.position) and audio_ok,
+		"Right-click sets the water gun down cleanly and suction/jet foley streams synthesize without clipping")
+	game.restart()
+	expect(not gun.held and gun.water_fill == 0.0 and gun.position.is_equal_approx(gun.HOME),
+		"Restart returns the bamboo water gun empty to its roadside spot")
 
 func check_music_cycle() -> void:
 	var director := game.music_director

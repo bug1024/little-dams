@@ -103,6 +103,18 @@ func ignite() -> void:
 		heat = 0.14
 		smoke_due = 0.07
 
+func douse(amount: float) -> void:
+	dampness = clampf(dampness + amount, 0.0, 1.0)
+	if burning:
+		heat = maxf(0.0, heat - amount * 0.85)
+		if puffs.size() < 24 and rng.randf() < 0.45:
+			add_smoke(true)
+		if heat <= 0.025 or dampness >= 0.88:
+			ash = maxf(ash, 0.56)
+			burning = false
+			heat = 0.0
+			add_smoke(false)
+
 func advance(dt: float, rain: float, wind: Wind) -> void:
 	clock += dt
 	dampness = clampf(dampness + dt * (rain * 0.46 - 0.12 - heat * 0.11), 0.0, 1.0)

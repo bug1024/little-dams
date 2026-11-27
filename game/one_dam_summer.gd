@@ -201,7 +201,7 @@ func advance_insect(dt: float) -> void:
 			var exposed := wind != null and wind.strength_at(insect_position.x / 320.0) > 0.73
 			var flooded := surface_impulse > 0.60 and absf(insect_position.x - impulse_x) < 37.0
 			var twilight_rest := current_day_phase > 1.45 and not temporary_perch
-			if (not twilight_rest and t >= 1.0) or (insect_age > 2.2 and (exposed or flooded)):
+			if (not twilight_rest and t >= 1.0) or (insect_age > 2.2 and ((exposed and not twilight_rest) or flooded)):
 				take_flight()
 		Flight.FLYING:
 			insect_position = flight_origin.lerp(hover_point, smooth)

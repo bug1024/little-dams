@@ -361,7 +361,20 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 			mantis.stall_time = 0.0
 			mantis.rest = rng.randf_range(0.4, 1.1)
 	if held != mantis and mantis_alert <= 0.54 and (mantis.position.is_equal_approx(mantis.target) or mantis.speed == 0.0):
-		if resting_night and not mantis_wet:
+		if mantis_wet:
+			var shore := mantis_patch.get_center()
+			if not wet.call(unproject.call(shore)) and point_clear(mantis, shore, mole, ROAM_AREA):
+				mantis.target = shore
+			else:
+				for attempt in 6:
+					var alt := Vector2(
+						rng.randf_range(mantis_patch.position.x, mantis_patch.end.x - 0.5),
+						rng.randf_range(mantis_patch.position.y, mantis_patch.end.y - 0.5)
+					)
+					if not wet.call(unproject.call(alt)) and point_clear(mantis, alt, mole, ROAM_AREA):
+						mantis.target = alt
+						break
+		elif resting_night:
 			# Diurnal mantis stays completely settled on dry land during blue-hour twilight.
 			mantis.target = mantis.position
 			mantis.speed = 0.0

@@ -13,6 +13,7 @@ const Frog = preload("res://game/one_dam_frog.gd")
 const Crab = preload("res://game/one_dam_crab.gd")
 const Bird = preload("res://game/one_dam_bird.gd")
 const Boat = preload("res://game/one_dam_boat.gd")
+const SquirtGun = preload("res://game/one_dam_squirt_gun.gd")
 const Hearth = preload("res://game/one_dam_hearth.gd")
 const Scenery = preload("res://game/one_dam_scenery.gd")
 const SIZE := Vector2(320, 200)
@@ -91,6 +92,8 @@ var hovered_pipe: Pool.DrainPipe
 var hovered_animal := Vector3.ZERO
 var hovered_hearth := false
 var hovered_boat := false
+var hovered_squirt_gun := false
+var squirt_mouse_down := false
 var held: Pool.Piece
 var pointer := Vector2.ZERO
 var clear_drop := false
@@ -118,6 +121,7 @@ var frog := Frog.new()
 var crab := Crab.new()
 var bird := Bird.new()
 var boat := Boat.new()
+var squirt_gun := SquirtGun.new()
 var wind := Wind.new()
 var rain := Rain.new()
 var hearth := Hearth.new()
@@ -238,6 +242,9 @@ func clear() -> void:
 	bird.reset()
 	boat.reset(from_screen)
 	hovered_boat = false
+	squirt_gun.reset()
+	hovered_squirt_gun = false
+	squirt_mouse_down = false
 	summer.fish_held = false
 	summer.fish_stranded = false
 	summer.fish_released = false
@@ -553,7 +560,47 @@ func has_discovery_hint() -> bool:
 		if held_floater.forage in [Forage.FLOWER, Forage.FOXTAIL]:
 			return not model.wall.is_empty() or not lower.wall.is_empty()
 		return false
+	if squirt_gun.held:
+		return squirt_gun.water_fill < 0.08 and not squirt_gun.drawing
 	return not holding_animal() and held == null and hearth.can_ignite()
+
+func screen_in_water(point: Vector2) -> bool:
+	return not on_bank(point) and is_wet(from_screen(point))
+
+func on_squirt_draw_ripple(screen_pt: Vector2) -> void:
+	var local := from_screen(screen_pt)
+	if is_wet(local) and ripples.size() < 28:
+		ripples.append(Vector4(local.x, local.y, 0.0, 0.16))
+
+func on_squirt_impact(screen_pt: Vector2, vel: Vector2, pressure: float, wet_hit: bool) -> void:
+	var local := from_screen(screen_pt)
+	if wet_hit:
+		if ripples.size() < 28 and fposmod(clock * 19.0 + screen_pt.x * 0.37, 1.0) < 0.36:
+			ripples.append(Vector4(local.x, local.y, 0.0, 0.14 + pressure * 0.12))
+		summer.disturb_water(local, 0.32 * pressure, false)
+	if boat.afloat and not boat.held and boat.screen_pos(to_screen, pointer).distance_to(screen_pt) < 12.0:
+		boat.nudge(vel.normalized() * (14.5 * pressure))
+	for item in floaters:
+		if item.afloat and item != held_floater and to_screen(item.point).distance_to(screen_pt) < 9.5:
+			item.drift = (item.drift + vel.normalized() * (9.5 * pressure)).limit_length(74.0)
+	if hearth.contains(screen_pt):
+		hearth.douse(0.075 * pressure)
+	for basin: Pool in [model, lower]:
+		for piece in basin.wall:
+			if piece.kind == Pool.EARTH and piece_screen(piece).distance_to(screen_pt) <= piece.radius + 2.0:
+				water.cloud(piece.point, 0.055 * pressure)
+				piece.wear = minf(0.95, piece.wear + 0.007 * pressure)
+	bird.disturb(screen_pt, 28.0)
+	summer.disturb_perch(screen_pt)
+	if not crab.held and crab.position.distance_to(screen_pt) < 12.0:
+		crab.alert = maxf(crab.alert, 0.95)
+		crab.snip = maxf(crab.snip, 0.85)
+	if not frog.held and frog.duration <= 0.0 and frog.screen_point().distance_to(screen_pt) < 11.0:
+		frog.pause = minf(frog.pause, 0.08)
+	if not summer.cicada_held and summer.cicada_position.distance_to(screen_pt) < 11.0 and summer.cicada_singing:
+		summer.cicada_singing = false
+		summer.cicada_sing_level = 0.0
+		summer.cicada_startled.emit()
 
 func blocked_at(basin: Pool, at: Vector2, clearance: float) -> bool:
 	for piece in basin.wall:
@@ -688,6 +735,7 @@ func advance(dt: float) -> void:
 	for piece in riffle:
 		piece.bounce = move_toward(piece.bounce, 0.0, dt * 4.6)
 	boat.advance(dt, water, wind, rain.intensity, surge_at, clear_float_path, can_float_at, is_wet, pipes, boat_ripple)
+	squirt_gun.advance(dt, pointer, wind, screen_in_water, on_squirt_impact, on_squirt_draw_ripple, squirt_mouse_down)
 	advance_streaks(dt)
 	summer.flower_perches.clear()
 	for item in floaters:
@@ -711,7 +759,7 @@ func advance(dt: float) -> void:
 	var twilight_calm := smoothstep(1.10, 1.85, day_phase)
 	var frog_activity := clampf(maxf(smoothstep(0.80, 1.85, day_phase), rain.after_rain * 0.85), 0.0, 1.0)
 	frog.advance(dt, frog_clear, frog_activity, twilight_calm)
-	var pointer_busy := holding_animal() or held != null or held_pipe != null or held_floater != null
+	var pointer_busy := holding_animal() or held != null or held_pipe != null or held_floater != null or squirt_gun.held
 	crab.advance(dt, pointer, pointer_busy, ground_insects.rocks, to_screen, from_screen, insect_in_water,
 		water, surge_at, crab_clear, insect_ripple, [ground_insects.mole.position, ground_insects.mantis.position, frog.position], day_phase)
 	for crawler in [ground_insects.mole, ground_insects.mantis]:
@@ -1007,6 +1055,9 @@ func draw_shore_foreground() -> void:
 	if bird.is_airborne() or scenery.in_front_of_ledge(bird.position):
 		bird.draw(layer, shade_color)
 	rain.draw_drops(layer)
+	squirt_gun.draw_stream(layer, shade_color, foam_ink())
+	if squirt_gun.held:
+		squirt_gun.draw_gun(layer, pointer, shade_color, foam_ink())
 	draw_discovery_hints(layer)
 	if hovered_animal.z > 0.0:
 		draw_hover_halo(layer, Vector2(hovered_animal.x, hovered_animal.y), hovered_animal.z, hovered_animal.z * 0.78)
@@ -1046,6 +1097,17 @@ func draw_discovery_hints(canvas: Node2D) -> void:
 					var sparkle := Color("#fceab8", 0.78 * pulse)
 					canvas.draw_rect(Rect2(crown - Vector2(1.5, 0.0), Vector2(3.5, 0.5)), sparkle)
 					canvas.draw_rect(Rect2(crown - Vector2(0.0, 1.5), Vector2(0.5, 3.5)), sparkle)
+		return
+	if squirt_gun.held:
+		if squirt_gun.water_fill < 0.08 and not squirt_gun.drawing:
+			var gx := clampf(pointer.x, 42.0, 278.0)
+			var water_spot := snap_pixel(Vector2(gx, shoreline(CHANNEL_Y, gx)))
+			draw_dashed_ellipse(canvas, water_spot, 10.5, 4.8,
+				Color("#a8e8d8", 0.72 * pulse), Color("#162825", 0.52 * pulse), 10)
+			for i in 2:
+				var drop_p := fposmod(clock * 0.9 + i * 0.5, 1.0)
+				var bead := snap_pixel(water_spot + Vector2((i - 0.5) * 6.0, -4.5 + drop_p * 4.5))
+				canvas.draw_rect(Rect2(bead, Vector2(1.0, 0.5)), Color("#d4f4e8", (1.0 - drop_p) * 0.85))
 		return
 	if not holding_animal() and held == null and hearth.can_ignite() and not hovered_hearth:
 		for i in 2:
@@ -1209,32 +1271,63 @@ func draw_seams(basin: Pool) -> void:
 
 func draw_dam_tension(basin: Pool, center: float) -> void:
 	var head := pool_profile(basin, center).y
-	var tension := smoothstep(0.28, 0.56, head)
-	if tension <= 0.04:
+	var tension := smoothstep(0.34, 0.56, head)
+	if tension <= 0.05:
 		return
+	# Pick at most 2 lowest, uncovered, highest-pressure points across the whole dam.
+	var candidates: Array = []
 	for piece in basin.wall:
 		if piece.support != null:
 			continue
-		var up_depth := water.depth_at(piece.point - Vector2(piece.radius * 0.92, 0.0))
-		if up_depth < 0.30:
+		if basin.wall.any(func(other: Pool.Piece) -> bool: return other.support == piece):
 			continue
+		var up_depth := water.depth_at(piece.point - Vector2(piece.radius * 0.92, 0.0))
+		if up_depth < 0.34:
+			continue
+		var emit_piece := piece
+		for other in basin.wall:
+			if other == piece or other.support != null:
+				continue
+			if other.point.x > emit_piece.point.x and other.point.x - piece.point.x < piece.radius + other.radius * 0.95 and absf(other.point.y - piece.point.y) < (piece.radius + other.radius) * 0.65:
+				emit_piece = other
+		var score := up_depth - piece.radius * 0.012 + (0.06 if emit_piece.kind == Pool.EARTH else 0.0)
+		candidates.append([score, up_depth, emit_piece])
+	candidates.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) > float(b[0]))
+	var shown := 0
+	var used: Array[Pool.Piece] = []
+	for item in candidates:
+		if shown >= 2:
+			break
+		var up_depth: float = float(item[1])
+		var piece: Pool.Piece = item[2]
+		if used.has(piece):
+			continue
+		used.append(piece)
+		var idx := shown
+		shown += 1
 		var p := piece_screen(piece)
-		var local_t := tension * smoothstep(0.30, 0.56, up_depth)
-		# Delicate overtopping threads trickling across high-pressure dam crests.
-		for i in 2:
-			var phase := fposmod(clock * (1.8 + i * 0.5) + piece.shade * 0.37 + i * 0.43, 1.0)
-			var y_off := (i - 0.5) * piece.radius * 0.52
-			var crest := snap_pixel(p + Vector2(-piece.radius * 0.25, y_off - piece.radius * 0.18))
-			var spill := snap_pixel(p + Vector2(piece.radius * (0.42 + phase * 0.48), y_off + piece.radius * (0.12 + phase * 0.22)))
-			draw_line(crest, spill, Color("#2f5a5a", local_t * 0.42), 1.0)
-			draw_line(crest, spill, foam_ink(local_t * (0.58 - phase * 0.25)), 0.5)
-		# Pressurized seepage bubbles & warm silt wisps at the toe of mud walls.
+		var wear_scale := (1.0 - piece.wear * 0.30) if piece.kind == Pool.EARTH else 1.0
+		var reach := piece.radius * wear_scale
+		var local_t := tension * lerpf(0.55, 1.0, smoothstep(0.34, 0.56, up_depth))
+		# Subtle wet glint slipping off the downstream toe (no stiff lines across rocks).
+		var seam_y := (0.18 if idx == 0 else -0.20) * reach
+		var lip := snap_pixel(p + Vector2(reach * 0.62, seam_y))
+		var glint := 0.45 + 0.55 * sin(clock * 3.0 + piece.shade * 1.7 + idx * 2.1)
+		draw_rect(Rect2(lip, Vector2(1.0, 0.5)), foam_ink(local_t * glint * 0.34))
+		# 2 tiny pixel seepage beads drifting from the outer downstream toe.
+		for b in 2:
+			var bp := fposmod(clock * (0.85 + b * 0.32) + piece.point.y * 0.17 + b * 0.52, 1.0)
+			var drift_x := reach * 0.68 + bp * (2.5 + local_t * 2.2)
+			var drift_y := seam_y + sin(bp * TAU + piece.shade) * 0.55 + bp * 0.65
+			var drop_pos := snap_pixel(p + Vector2(drift_x, drift_y))
+			var fade := sin(bp * PI) * local_t
+			draw_rect(Rect2(drop_pos + Vector2(0.0, 0.5), Vector2(1.0, 0.5)), Color("#244747", fade * 0.28))
+			draw_rect(Rect2(drop_pos, Vector2(0.5, 0.5)), foam_ink(fade * 0.44))
+		# Faint silt wisp at a stressed mud toe.
 		if piece.kind == Pool.EARTH:
-			for b in 2:
-				var bp := fposmod(clock * (1.2 + b * 0.65) + piece.point.y * 0.13 + b * 0.5, 1.0)
-				var toe := snap_pixel(p + Vector2(piece.radius * 0.62 + bp * 4.5, (b - 0.5) * piece.radius * 0.45 + sin(clock * 5.0 + b) * 0.6))
-				draw_rect(Rect2(toe, Vector2(1.5, 0.5)), Color("#6e5e46", local_t * (1.0 - bp) * 0.52))
-				draw_rect(Rect2(toe + Vector2(0.5, -0.5), Vector2(0.75, 0.75)), foam_ink(local_t * sin(bp * PI) * 0.62))
+			var sp := fposmod(clock * 0.68 + piece.point.y * 0.11, 1.0)
+			var silt_pos := snap_pixel(p + Vector2(reach * 0.72 + sp * 3.5, seam_y + 0.5))
+			draw_rect(Rect2(silt_pos, Vector2(1.5, 0.5)), Color("#6c5d45", local_t * sin(sp * PI) * 0.30))
 
 func draw_breach_jet(event: Breach) -> void:
 	if event == null or event.strength < 0.035 or event.phase not in [Breach.Phase.OPENING, Breach.Phase.JET]:
@@ -1552,6 +1645,10 @@ func draw_floaters() -> void:
 	boat.draw(self, to_screen, pointer, shade_color, foam_ink())
 	if hovered_boat and not boat.held:
 		draw_hover_halo(self, boat.screen_pos(to_screen, pointer), 7.5, 4.8)
+	if not squirt_gun.held:
+		squirt_gun.draw_gun(self, pointer, shade_color, foam_ink())
+		if hovered_squirt_gun:
+			draw_hover_halo(self, squirt_gun.position, 11.5, 5.2)
 
 func forage_screen(item: Floater) -> Vector2:
 	return piece_screen(item.host) + item.host_offset if item.host != null else to_screen(item.point)
