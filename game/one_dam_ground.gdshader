@@ -29,7 +29,10 @@ float branch_sway(vec2 p) {
 }
 
 float foliage_color(vec3 color) {
-	return smoothstep(0.010, 0.074, color.g - color.r * 0.85) * smoothstep(0.024, 0.124, color.g - color.b);
+	float green_leaf = smoothstep(0.010, 0.074, color.g - color.r * 0.85) * smoothstep(0.024, 0.124, color.g - color.b);
+	// Also sway warm honey-gold and crimson autumn maple/fern leaves.
+	float autumn_leaf = smoothstep(0.18, 0.36, color.r - color.b) * smoothstep(0.06, 0.24, color.r - color.g * 0.65) * smoothstep(0.12, 0.42, color.r);
+	return max(green_leaf, autumn_leaf * 0.85);
 }
 
 float cast_leaf_shade(vec2 p, vec2 texel) {
@@ -65,35 +68,31 @@ void fragment() {
 	vec3 art = source.rgb;
 	float green = foliage_color(art);
 	if (!independent_prop) {
-		float hanging = fringe(p, vec2(0.162, 0.089), vec2(0.245, 0.142));
-		float upper_growth = max(fringe(p, vec2(0.42, 0.17), vec2(0.087, 0.086)),
-			fringe(p, vec2(0.72, 0.16), vec2(0.11, 0.11)));
-		float reeds = fringe(p, vec2(0.055, 0.82), vec2(0.115, 0.19));
-		float near_bank = max(fringe(p, vec2(0.709, 0.843), vec2(0.125, 0.129)),
-			fringe(p, vec2(0.88, 0.659), vec2(0.086, 0.118)));
-		float mid_bank = fringe(p, vec2(0.464, 0.306), vec2(0.087, 0.063));
+		float hanging = fringe(p, vec2(0.16, 0.09), vec2(0.26, 0.16));
+		float right_pine = fringe(p, vec2(0.95, 0.22), vec2(0.12, 0.26));
+		float reeds = fringe(p, vec2(0.06, 0.84), vec2(0.14, 0.19));
+		float right_reeds = fringe(p, vec2(0.94, 0.84), vec2(0.12, 0.20));
+		float mid_bank = fringe(p, vec2(0.46, 0.31), vec2(0.08, 0.06));
 		float gust = wind_at(p.x);
-		float flutter = 0.80 + gust * 0.75;
-		float movement = hanging * branch_sway(p);
-		movement += max(upper_growth, mid_bank) * branch_sway(p + vec2(0.12, 0.04));
-		movement += max(reeds, near_bank) * branch_sway(p + vec2(0.24, 0.03)) * 1.28;
-		float lean = gust * (0.20 + hanging * 0.78 + max(upper_growth, mid_bank) * 0.57 + max(reeds, near_bank) * 1.10);
-		// Sampling against the gust shifts the painted leaves downwind.
-		vec2 displacement = -movement * flutter * vec2(2.7, -0.85) - lean * vec2(1.8, 0.72);
+		float flutter = 0.72 + gust * 0.72;
+		float movement = max(hanging, right_pine) * branch_sway(p);
+		movement += mid_bank * branch_sway(p + vec2(0.12, 0.04));
+		movement += max(reeds, right_reeds) * branch_sway(p + vec2(0.24, 0.03)) * 1.15;
+		float lean = gust * (0.14 + max(hanging, right_pine) * 0.62 + mid_bank * 0.45 + max(reeds, right_reeds) * 0.85);
+		vec2 displacement = -movement * flutter * vec2(2.1, -0.65) - lean * vec2(1.4, 0.55);
 		vec2 moved = p + round(displacement * green) * texel;
 		vec3 tip = texture(TEXTURE, moved).rgb;
 		if (foliage_color(tip) > 0.12) {
 			art = tip;
 		}
 	}
-	// Keep darks rich and frame the creek with a cool forest canopy vignette instead of hazy gray.
+	// Gentle painterly corner grounding while preserving Witchbrook autumn color vibrancy.
 	float distance_to_creek = abs(p.y - (0.55 - p.x * 0.17));
-	float far_bank = smoothstep(0.22, 0.52, distance_to_creek);
-	float corner_shade = smoothstep(0.42, 0.96, length((p - vec2(0.52, 0.50)) * vec2(1.05, 1.15)));
-	float frame_shade = clamp(far_bank * 0.55 + corner_shade * 0.45, 0.0, 1.0);
+	float far_bank = smoothstep(0.28, 0.56, distance_to_creek);
+	float corner_shade = smoothstep(0.48, 0.98, length((p - vec2(0.50, 0.50)) * vec2(1.02, 1.12)));
+	float frame_shade = clamp(far_bank * 0.45 + corner_shade * 0.55, 0.0, 1.0);
 	float luma = dot(art, vec3(0.26, 0.63, 0.11));
-	art = mix(art, vec3(luma) * vec3(0.92, 0.97, 0.99), far_bank * 0.10);
-	art *= mix(vec3(1.0), vec3(0.84, 0.88, 0.87), frame_shade * 0.52);
+	art *= mix(vec3(1.0), vec3(0.88, 0.89, 0.92), frame_shade * 0.26);
 
 	vec2 pixel = floor(p / texel);
 	float patches = earth_patch(pixel / vec2(34.0, 13.0));
@@ -123,23 +122,19 @@ void fragment() {
 	// The plate contains colored water fringe past the playable mask. Tint it as damp ground.
 	float painted_water = smoothstep(0.12, 0.26, art.g - art.r) * smoothstep(0.60, 0.83, art.b / max(art.g, 0.01));
 	art = mix(art, luma * vec3(0.79, 0.85, 0.65), painted_water * smoothstep(0.04, 0.40, bank));
-	// Leave the rock and soil warm, with less orange glare and fewer yellow-green peaks.
+	// Preserve crisp painterly autumn hues without washing out golden maples or violet-grey rocks.
 	vec3 land = afternoon_light(art, p, wet_bank);
 	float value = dot(land, vec3(0.26, 0.63, 0.11));
-	float ochre = smoothstep(0.055, 0.24, land.r - land.b) * smoothstep(0.27, 0.67, value);
-	float foliage = smoothstep(0.035, 0.19, land.g - land.b) * smoothstep(-0.04, 0.065, land.g - land.r);
-	land = mix(land, value * vec3(1.07, 1.005, 0.91), 0.07 + max(ochre * 0.16, foliage * 0.14));
-	land -= smoothstep(0.56, 0.86, value) * vec3(0.048, 0.034, 0.018);
 	float dusk = dusk_weight();
 	float twi = twilight_weight();
-	float sunlit = sunlight_at(p) * smoothstep(0.26, 0.58, value) * (0.73 + patches * 0.27);
-	vec3 sun_tint = mix(vec3(0.081, 0.071, 0.054), vec3(0.135, 0.068, 0.024), dusk);
+	float sunlit = sunlight_at(p) * smoothstep(0.26, 0.58, value) * (0.76 + patches * 0.24);
+	vec3 sun_tint = mix(vec3(0.055, 0.048, 0.036), vec3(0.115, 0.058, 0.020), dusk);
 	land += sun_tint * sunlit * (1.0 - rain_intensity * 0.82) * (1.0 - twi * 0.92);
 	float leaf_shade = cast_leaf_shade(p, texel) * smoothstep(0.30, 0.58, value);
-	land *= mix(vec3(1.0), vec3(0.88, 0.91, 0.96), leaf_shade * (0.72 + sunlit * 0.28) * (1.0 - rain_intensity * 0.66) * (1.0 - twi * 0.75));
+	land *= mix(vec3(1.0), vec3(0.88, 0.90, 0.96), leaf_shade * (0.68 + sunlit * 0.26) * (1.0 - rain_intensity * 0.66) * (1.0 - twi * 0.75));
 	float soaked = rain_wetness * (0.66 + patches * 0.34);
-	land *= mix(vec3(1.0), vec3(0.74, 0.81, 0.89), soaked);
-	land += vec3(0.046, 0.062, 0.059) * soaked * green * smoothstep(0.47, 0.68, value) * (1.0 - twi * 0.55);
+	land *= mix(vec3(1.0), vec3(0.75, 0.81, 0.89), soaked);
+	land += vec3(0.040, 0.055, 0.052) * soaked * green * smoothstep(0.47, 0.68, value) * (1.0 - twi * 0.55);
 	if (hearth_light.z > 0.005) {
 		vec2 fire_radius = vec2(0.145, 0.165) * (1.0 + dusk * 0.12 + twi * 0.34);
 		vec2 fire_offset = (p - hearth_light.xy) / fire_radius;

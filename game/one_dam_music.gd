@@ -11,9 +11,10 @@ const SILENCE_MAX := 38.0
 const SUNNY_CUTOFF := 19000.0
 const RAIN_CUTOFF := 2300.0
 
+# Tracks carry optional season & time-of-day tags so seasonal/nocturnal music plugs in cleanly.
 const TRACKS := [
-	{"path": "res://game/one_dam_audio/summer_memory_8bit.wav", "gain_db": -20.0},
-	{"path": "res://game/one_dam_audio/afternoon.wav", "gain_db": -12.0},
+	{"path": "res://game/one_dam_audio/summer_memory_8bit.wav", "gain_db": -20.0, "seasons": [], "day_stages": []},
+	{"path": "res://game/one_dam_audio/afternoon.wav", "gain_db": -12.0, "seasons": [], "day_stages": []},
 ]
 
 var rng := RandomNumberGenerator.new()
@@ -21,6 +22,8 @@ var player: AudioStreamPlayer
 var low_pass: AudioEffectLowPassFilter
 var streams: Array[AudioStreamWAV] = []
 var lengths: Array[float] = []
+var active_season := &"autumn"
+var active_day_tag := &"afternoon"
 var state := State.INTRO_WAIT
 var track_index := 0
 var elapsed := 0.0
@@ -95,8 +98,34 @@ func set_enabled(value: bool) -> void:
 		elif state == State.PLAYING and playable and player != null and player.stream_paused:
 			player.stream_paused = false
 
+func set_context(season_id: StringName, day_tag: StringName) -> void:
+	active_season = season_id
+	active_day_tag = day_tag
+
+func eligible_indices() -> Array[int]:
+	var matched: Array[int] = []
+	for i in TRACKS.size():
+		var seasons: Array = TRACKS[i].get("seasons", [])
+		var stages: Array = TRACKS[i].get("day_stages", [])
+		var season_ok := seasons.is_empty() or seasons.has(active_season)
+		var stage_ok := stages.is_empty() or stages.has(active_day_tag)
+		if season_ok and stage_ok:
+			matched.append(i)
+	if matched.is_empty():
+		for i in TRACKS.size():
+			matched.append(i)
+	return matched
+
+func next_eligible_index(current: int) -> int:
+	var pool := eligible_indices()
+	var pos := pool.find(current)
+	if pos == -1:
+		return pool[0]
+	return pool[(pos + 1) % pool.size()]
+
 func start_track(index: int) -> void:
-	track_index = posmod(index, TRACKS.size())
+	var pool := eligible_indices()
+	track_index = index if pool.has(index) else pool[0]
 	state = State.PLAYING
 	elapsed = 0.0
 	if player != null and streams.size() > track_index:
@@ -159,7 +188,7 @@ func advance(dt: float, rain_intensity: float, surge_strength: float) -> void:
 				state = State.SILENCE
 				elapsed = 0.0
 				silence_left = rng.randf_range(SILENCE_MIN, SILENCE_MAX)
-				track_index = (track_index + 1) % TRACKS.size()
+				track_index = next_eligible_index(track_index)
 				current_gain_db = -60.0
 				if player != null:
 					player.stop()

@@ -208,13 +208,14 @@ func draw_bed(canvas: Node2D, hover: bool) -> void:
 	for i in outline.size():
 		shadow.append(CENTER + outline[i] * 1.13 + Vector2(0.5, 1.4))
 		outline[i] += CENTER
-	canvas.draw_colored_polygon(shadow, Color("#26302495"))
-	canvas.draw_colored_polygon(outline, Color("#554934").lerp(Color("#3b3830"), dampness * 0.7))
+	canvas.draw_colored_polygon(shadow, Color("#2a221d68"))
+	canvas.draw_colored_polygon(outline, Color("#7d6852").lerp(Color("#4c433c"), dampness * 0.65))
+	canvas.draw_polyline(outline, Color("#352822a8"), 0.55)
 	var dip := PackedVector2Array([Vector2(-11, -1), Vector2(-8, -4), Vector2(-2, -5), Vector2(4, -4),
 		Vector2(8, -4), Vector2(11, 0), Vector2(8, 3), Vector2(4, 4), Vector2(-3, 5), Vector2(-8, 3)])
 	for i in dip.size():
 		dip[i] += CENTER
-	canvas.draw_colored_polygon(dip, Color("#3d3128").lerp(Color("#24231f"), ash))
+	canvas.draw_colored_polygon(dip, Color("#574435").lerp(Color("#2d2723"), ash))
 	for i in 77:
 		var at := Vector2(fposmod(i * 4.371, 28.0) - 14.0, fposmod(i * 3.781, 12.0) - 6.0)
 		if (at / Vector2(14, 6)).length_squared() > 0.94:

@@ -44,6 +44,7 @@ func run() -> void:
 	check_tactile_and_snapshot()
 	check_boat_and_polish()
 	check_squirt_gun()
+	check_world_architecture()
 	check_music_cycle()
 	game.free()
 	quit(failures)
@@ -1159,6 +1160,57 @@ func check_squirt_gun() -> void:
 	game.restart()
 	expect(not gun.held and gun.water_fill == 0.0 and gun.position.is_equal_approx(gun.HOME),
 		"Restart returns the bamboo water gun empty to its roadside spot")
+
+func check_world_architecture() -> void:
+	game.restart()
+	var view := game.scene
+	var world := view.world
+	expect(world.season == view.SeasonProfile.Season.AUTUMN and world.profile.lily_pads_visible,
+		"WorldState boots into the active autumn SeasonProfile with natural creek lily pads")
+
+	# Seasonal ecology matrix: twilight fireflies glow in autumn, while winter silences insects/frogs and hides lily pads.
+	world.sync(2.0, 0.0, 0.0, 0.0, 0.2, 0.5, 0.0)
+	var autumn_twi_firefly := world.species_activity(&"firefly")
+	var autumn_twi_cicada := world.species_activity(&"cicada")
+	world.set_season(view.SeasonProfile.Season.WINTER)
+	var winter_firefly := world.species_activity(&"firefly")
+	var winter_frog := world.species_activity(&"frog")
+	var winter_bird := world.species_activity(&"bird")
+	expect(autumn_twi_firefly > 0.80 and autumn_twi_cicada < 0.05 and winter_firefly == 0.0 and winter_frog == 0.0 and not world.profile.lily_pads_visible,
+		"SeasonProfile and WorldState drive seasonal and diurnal species activity cleanly")
+	world.sync(0.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0)
+	expect(world.species_activity(&"bird") > 0.50 and winter_bird < 0.05,
+		"Winter birds remain active in daytime while resting in twilight")
+	world.set_season(view.SeasonProfile.Season.AUTUMN)
+
+	# Decoupled WorldStimulus bus routes physical events from tools/world to listeners without hard-coded coupling.
+	var received := [0]
+	view.stimuli.subscribe(&"test_probe", func(ev: Variant) -> void:
+		if ev.kind == view.WorldStimulus.Kind.SPLASH and ev.strength > 0.3:
+			received[0] += 1
+	)
+	var before_count: int = view.stimuli.emitted_count
+	view.material_touch(Vector2(130.0, 0.0), false)
+	view.stimuli.unsubscribe(&"test_probe")
+	expect(received[0] == 1 and view.stimuli.emitted_count > before_count,
+		"WorldStimulus bus broadcasts physical splash events cleanly to subscribed entities")
+
+	# MusicDirector accepts world season/day context cleanly and filters eligible tracks.
+	game.music_director.set_context(&"winter", &"twilight")
+	expect(not game.music_director.eligible_indices().is_empty(),
+		"MusicDirector resolves seasonal and diurnal context with graceful track fallback")
+	game.music_director.set_context(&"autumn", &"afternoon")
+
+	# Pure wallpaper mode hides all HUD controls and restores them cleanly.
+	expect(not game.wallpaper_mode and game.hud_actions.visible, "HUD controls are visible in normal mode")
+	game.toggle_wallpaper_mode()
+	frames(45)
+	var hidden_ok := game.wallpaper_mode and not game.hud_actions.visible
+	game.toggle_wallpaper_mode()
+	frames(45)
+	expect(hidden_ok and not game.wallpaper_mode and game.hud_actions.visible,
+		"Wallpaper mode cleanly hides and restores all HUD controls")
+	game.restart()
 
 func check_music_cycle() -> void:
 	var director := game.music_director

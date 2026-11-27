@@ -55,6 +55,8 @@ func _ready() -> void:
 func firefly_activity() -> float:
 	if view == null:
 		return 0.0
+	if view.world != null:
+		return view.world.species_activity(&"firefly")
 	var phase: float = view.day_phase
 	var rainfall: float = view.rain.intensity
 	return smoothstep(0.65, 1.55, phase) * (1.0 - rainfall * 0.85)
@@ -124,7 +126,10 @@ func advance_leaf(dt: float) -> void:
 
 func finish_leaf() -> void:
 	leaf = null
-	leaf_due = clock + rng.randf_range(13.0, 27.0)
+	var span := Vector2(6.5, 14.5)
+	if view != null and view.world != null:
+		span = view.world.profile.leaf_interval
+	leaf_due = clock + rng.randf_range(span.x, span.y)
 	leaf_source_x = rng.randf_range(22.0, 126.0)
 
 func snap(point: Vector2) -> Vector2:
@@ -188,10 +193,18 @@ func draw_gnats(visibility := 1.0) -> void:
 func draw_falling_leaf() -> void:
 	var lifted := leaf.ground - Vector2(0.0, leaf.height)
 	var fade := clampf(leaf_rest / 1.5, 0.0, 1.0) if leaf.height <= 0.0 else 1.0
-	# A tumbling leaf shows its edge: squash the shape across the flutter.
-	var squash := 0.35 + 0.65 * absf(cos(clock * 2.6 + leaf.phase))
+	# A tumbling autumn maple/birch leaf shows its edge as it flutters down to the creek.
+	var squash := 0.38 + 0.62 * absf(cos(clock * 2.6 + leaf.phase))
 	var shape := PackedVector2Array()
-	for corner in [Vector2(-3, 0), Vector2(-1, -1.3), Vector2(1.5, -1.0), Vector2(3, 0), Vector2(1, 1.5), Vector2(-1.2, 1.2)]:
+	for corner in [Vector2(-3.2, 0), Vector2(-1.2, -1.5), Vector2(1.4, -1.2), Vector2(3.2, 0), Vector2(1.2, 1.5), Vector2(-1.3, 1.3)]:
 		shape.append(snap(lifted + (corner * Vector2(1.0, squash)).rotated(leaf_turn)))
-	draw_colored_polygon(shape, Color(0.66, 0.60, 0.27, fade))
-	draw_line(snap(lifted - Vector2(2, 0).rotated(leaf_turn)), snap(lifted + Vector2(2.5, 0).rotated(leaf_turn)), Color(0.85, 0.80, 0.42, fade), 0.5)
+	var hue_pick := fposmod(leaf.phase * 0.73, 1.0)
+	var base_col := Color("#e2a73e")
+	var outline_col := Color("#332017")
+	if view != null and view.world != null:
+		base_col = view.world.profile.pick_leaf_color(hue_pick)
+		outline_col = view.world.profile.leaf_outline
+	var vein_col := base_col.lightened(0.28)
+	draw_colored_polygon(shape, Color(base_col, fade))
+	draw_polyline(shape, Color(outline_col, fade * 0.82), 0.5)
+	draw_line(snap(lifted - Vector2(2.0, 0).rotated(leaf_turn)), snap(lifted + Vector2(2.4, 0).rotated(leaf_turn)), Color(vein_col, fade), 0.5)

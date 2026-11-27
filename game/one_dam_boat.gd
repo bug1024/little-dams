@@ -198,11 +198,11 @@ func draw(canvas: Node2D, project: Callable, pointer: Vector2, tint_at: Callable
 			snap(p + Vector2(-3.0, 2.8)),
 		]), shadow_col)
 
-	var paper_lit := apply_tint(Color("#f4ebd3").lerp(Color("#d5c9a8"), soaked * 0.65), p, tint_at)
-	var paper_mid := apply_tint(Color("#dfd2b2").lerp(Color("#b6a98b"), soaked * 0.65), p, tint_at)
-	var paper_shade := apply_tint(Color("#baaa89").lerp(Color("#8c8168"), soaked * 0.65), p, tint_at)
-	var crease_ink := apply_tint(Color("#6b5f49"), p, tint_at)
-	var rule_ink := apply_tint(Color("#8ea7b5", 0.55), p, tint_at)
+	var paper_lit := apply_tint(Color("#f7efe0").lerp(Color("#d8cbb0"), soaked * 0.65), p, tint_at)
+	var paper_mid := apply_tint(Color("#e4d6bb").lerp(Color("#bba98e"), soaked * 0.65), p, tint_at)
+	var paper_shade := apply_tint(Color("#bdab8e").lerp(Color("#8e7f6b"), soaked * 0.65), p, tint_at)
+	var crease_ink := apply_tint(Color("#3a2c24"), p, tint_at)
+	var rule_ink := apply_tint(Color("#8ca2b2", 0.55), p, tint_at)
 
 	var xform := func(local: Vector2) -> Vector2:
 		var scaled := Vector2(local.x * facing, local.y * squash)

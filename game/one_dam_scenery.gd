@@ -4,11 +4,9 @@ const Wind = preload("res://game/one_dam_wind.gd")
 const ART_SIZE := Vector2(640, 400)
 const ART_SCALE := 2.0
 const GROUND := preload("res://game/scenery/terrain.png")
-const PLANTS := [
-	[&"LowerBankReeds", preload("res://game/scenery/lower_reeds.png"), Vector2(0, 266), 0.87],
-	[&"UpperBankReeds", preload("res://game/scenery/upper_reeds.png"), Vector2(215, 17), 0.86],
-	[&"RockCreviceFern", preload("res://game/scenery/bank_fern.png"), Vector2(512, 230), 0.76],
-]
+# Autumn 2B paints all bank reeds, ferns, pine boughs, and maple canopies cohesively on the
+# base terrain plate and sways them cleanly in one_dam_ground.gdshader (zero mismatched cutouts).
+const PLANTS := []
 const LEDGE := preload("res://game/scenery/foreground_ledge.png")
 const LEDGE_ORIGIN := Vector2(505, 269)
 

@@ -35,6 +35,7 @@ var music_button := Button.new()
 var last_day_stage := 0
 var hud_actions: HBoxContainer
 var hud_idle := 0.0
+var wallpaper_mode := false
 var title_box: Control
 var title_alpha := 0.0
 var title_dismissed := false
@@ -307,6 +308,14 @@ func toggle_fullscreen() -> void:
 	var next_mode := DisplayServer.WINDOW_MODE_WINDOWED if current_mode in [DisplayServer.WINDOW_MODE_FULLSCREEN, DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN] else DisplayServer.WINDOW_MODE_FULLSCREEN
 	DisplayServer.window_set_mode(next_mode)
 
+func toggle_wallpaper_mode() -> void:
+	wallpaper_mode = not wallpaper_mode
+	if wallpaper_mode:
+		dismiss_title()
+	if hud_actions != null:
+		hud_actions.visible = not wallpaper_mode
+		hud_actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
 func cycle_time() -> void:
 	dismiss_title()
 	hud_idle = 0.0
@@ -457,9 +466,10 @@ func _process(delta: float) -> void:
 		last_day_stage = stage_now
 		controls_art.set_time_stage(time_button, stage_now)
 	if hud_actions != null:
-		var target_alpha := 0.62 if hud_idle > 3.5 else 1.0
-		hud_actions.modulate.a = lerpf(hud_actions.modulate.a, target_alpha,
-			1.0 - exp(-delta * (8.5 if target_alpha > hud_actions.modulate.a else 2.0)))
+		var target_alpha := 0.0 if wallpaper_mode else (0.62 if hud_idle > 3.5 else 1.0)
+		var fade_rate := 7.5 if wallpaper_mode else (8.5 if target_alpha > hud_actions.modulate.a else 2.2)
+		hud_actions.modulate.a = lerpf(hud_actions.modulate.a, target_alpha, 1.0 - exp(-delta * fade_rate))
+		hud_actions.visible = not wallpaper_mode or hud_actions.modulate.a > 0.02
 	var pointer := stage_pointer(screen_mouse)
 	update_grab(pointer)
 	update_hover(pointer)
@@ -467,6 +477,7 @@ func _process(delta: float) -> void:
 	var flood_surge := maxf(maxf(scene.surge_at(155.0), scene.surge_at(187.0)), scene.surge_at(225.0))
 	var breach_active := upper_breach.strength if upper_breach.phase in [Breach.Phase.JET, Breach.Phase.SURGE] else 0.0
 	breach_active = maxf(breach_active, lower_breach.strength if lower_breach.phase in [Breach.Phase.JET, Breach.Phase.SURGE] else 0.0)
+	music_director.set_context(scene.world.profile.id, scene.world.day_tag())
 	music_director.advance(delta, scene.rain.intensity, clampf(maxf(flood_surge, breach_active), 0.0, 1.0))
 	var current := maxf(water.discharge_at(151.0), water.discharge_at(249.0))
 	var creek_level := lerpf(-6.0, -3.5, smoothstep(0.35, 2.5, current))
@@ -599,13 +610,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.physical_keycode == KEY_R:
 			request_restart()
 		elif event.physical_keycode == KEY_ESCAPE:
-			cancel_grab()
+			if wallpaper_mode and held == null and held_pipe == null and held_floater == null and not scene.holding_animal() and not scene.boat.held and not scene.squirt_gun.held:
+				toggle_wallpaper_mode()
+			else:
+				cancel_grab()
 		elif event.physical_keycode in [KEY_ENTER, KEY_SPACE]:
 			opening()
 		elif event.physical_keycode == KEY_T:
 			cycle_time()
 		elif event.physical_keycode == KEY_P:
 			take_snapshot()
+		elif event.physical_keycode == KEY_H:
+			toggle_wallpaper_mode()
 		return
 	if event is InputEventMouseMotion:
 		var pointer := stage_pointer(event.position)
