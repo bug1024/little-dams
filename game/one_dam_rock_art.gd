@@ -48,39 +48,39 @@ const STONE_RAMPS := [
 	},
 ]
 
-# Earthy damp creek-bank clay/mud ramps (richer & deeper than dry sunlit sand).
+# Calm, natural rustic creek-bank earth ramps (shared base texture tinted per season).
 const EARTH_RAMPS := [
 	{
-		"lit": Color("#b68156"),
-		"top": Color("#996641"),
-		"mid": Color("#774c2f"),
-		"dark": Color("#553520"),
-		"crevice": Color("#3a2315"),
-		"grit": Color("#9f8a88"),
+		"lit": Color("#9f836c"),
+		"top": Color("#866b56"),
+		"mid": Color("#695241"),
+		"dark": Color("#4c3a2e"),
+		"crevice": Color("#34271f"),
+		"grit": Color("#938682"),
 	},
 	{
-		"lit": Color("#ad7950"),
-		"top": Color("#8f5f3c"),
-		"mid": Color("#6f462b"),
-		"dark": Color("#4e301d"),
-		"crevice": Color("#352013"),
-		"grit": Color("#968386"),
+		"lit": Color("#987d68"),
+		"top": Color("#7f6653"),
+		"mid": Color("#634d3e"),
+		"dark": Color("#47362b"),
+		"crevice": Color("#30241d"),
+		"grit": Color("#8c8180"),
 	},
 	{
-		"lit": Color("#be895d"),
-		"top": Color("#a06c45"),
-		"mid": Color("#7e5133"),
-		"dark": Color("#5a3822"),
-		"crevice": Color("#3d2517"),
-		"grit": Color("#a6918c"),
+		"lit": Color("#a68a72"),
+		"top": Color("#8c705b"),
+		"mid": Color("#6e5645"),
+		"dark": Color("#503d30"),
+		"crevice": Color("#372921"),
+		"grit": Color("#9a8c86"),
 	},
 	{
-		"lit": Color("#a4734d"),
-		"top": Color("#875938"),
-		"mid": Color("#674128"),
-		"dark": Color("#492d1b"),
-		"crevice": Color("#311d12"),
-		"grit": Color("#8f7e82"),
+		"lit": Color("#907764"),
+		"top": Color("#77604f"),
+		"mid": Color("#5c483b"),
+		"dark": Color("#433329"),
+		"crevice": Color("#2d221b"),
+		"grit": Color("#867c7c"),
 	},
 ]
 
@@ -518,11 +518,40 @@ func carve_earth(radius_pixels: int, shade: int) -> Rock:
 		if mask[gy * w + gx] == 1:
 			image.set_pixel(gx, gy, grit_col if g_idx != 1 else crevice_col)
 
-	apply_sel_out(image, Color("#2f1c13"), Color("#563724"))
+	apply_sel_out(image, Color("#2c221c"), Color("#4d3d33"))
 	var mound := Rock.new()
 	compute_rim(image, mound)
 	mound.texture = ImageTexture.create_from_image(image)
+	mound.snow_cap = build_earth_frost_cap(image, seed)
 	return mound
+
+func build_earth_frost_cap(earth_img: Image, seed: float) -> ImageTexture:
+	# Sparse frosty rime & broken snow-edge dusting along upper frozen-earth ridges in Winter.
+	var w := earth_img.get_width()
+	var h := earth_img.get_height()
+	var frost := Image.create_empty(w, h, false, Image.FORMAT_RGBA8)
+	var rime_hi := Color(0.90, 0.95, 0.99, 0.82)
+	var rime_mid := Color(0.75, 0.84, 0.93, 0.64)
+	for x in range(2, w - 2):
+		var top_y := -1
+		for y in range(1, h - 2):
+			if earth_img.get_pixel(x, y).a > 0.5:
+				top_y = y
+				break
+		if top_y < 0 or top_y > roundi(h * 0.55):
+			continue
+		if earth_img.get_pixel(x - 1, top_y + 1).a <= 0.5 or earth_img.get_pixel(x + 1, top_y + 1).a <= 0.5:
+			continue
+		var n := hashf(Vector2(float(x) * 0.63 + seed, 4.1))
+		if n < 0.24:
+			continue
+		var depth := 2 if n > 0.68 else 1
+		for dy in depth:
+			var sy := top_y + dy
+			if sy >= h - 1 or earth_img.get_pixel(x, sy).a <= 0.5:
+				break
+			frost.set_pixel(x, sy, rime_hi if dy == 0 else rime_mid)
+	return ImageTexture.create_from_image(frost)
 
 func apply_sel_out(image: Image, dark_edge: Color, lit_edge: Color) -> void:
 	var w := image.get_width()

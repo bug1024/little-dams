@@ -71,6 +71,8 @@ var squirt_jet_audio: AudioStreamPlayer
 var steam_audio: AudioStreamPlayer
 var ice_crack_audio: AudioStreamPlayer
 var cricket_audio: AudioStreamPlayer
+var cricket_echo_audio: AudioStreamPlayer
+var cricket_streams: Array[AudioStreamWAV] = []
 var breeze_audio: AudioStreamPlayer
 var stake_audio: AudioStreamPlayer
 var scurry_audio: AudioStreamPlayer
@@ -87,6 +89,13 @@ var steam_cooldown := 0.0
 var ice_crack_cooldown := 0.0
 var breeze_cooldown := 4.0
 var scurry_cooldown := 0.0
+var cricket_cooldown := 2.6
+var cricket_bout_left := 0
+var cricket_voice := 0
+var cricket_voice_pitch := 1.0
+var cricket_voice_db := -30.5
+var cricket_echo_due := -1.0
+var cricket_echo_voice := 2
 var gate_plug: Pool.Piece
 var gate_pool: Pool
 
@@ -207,10 +216,19 @@ func _ready() -> void:
 		ice_crack_audio.stream = WaterAudio.ice_crack()
 		ice_crack_audio.volume_db = -19.5
 		add_child(ice_crack_audio)
+		cricket_streams = [
+			WaterAudio.evening_crickets(0),
+			WaterAudio.evening_crickets(1),
+			WaterAudio.evening_crickets(2),
+		]
 		cricket_audio = AudioStreamPlayer.new()
-		cricket_audio.stream = WaterAudio.evening_crickets()
-		cricket_audio.volume_db = -60.0
+		cricket_audio.stream = cricket_streams[0]
+		cricket_audio.volume_db = -30.5
 		add_child(cricket_audio)
+		cricket_echo_audio = AudioStreamPlayer.new()
+		cricket_echo_audio.stream = cricket_streams[2]
+		cricket_echo_audio.volume_db = -34.0
+		add_child(cricket_echo_audio)
 		breeze_audio = AudioStreamPlayer.new()
 		breeze_audio.stream = WaterAudio.leaf_rustle()
 		breeze_audio.volume_db = -25.0
@@ -460,6 +478,8 @@ func restart() -> void:
 		ice_crack_audio.stop()
 	if cricket_audio != null:
 		cricket_audio.stop()
+	if cricket_echo_audio != null:
+		cricket_echo_audio.stop()
 	if breeze_audio != null:
 		breeze_audio.stop()
 	if stake_audio != null:
@@ -476,6 +496,9 @@ func restart() -> void:
 	ice_crack_cooldown = 0.0
 	breeze_cooldown = 4.0
 	scurry_cooldown = 0.0
+	cricket_cooldown = 2.6
+	cricket_bout_left = 0
+	cricket_echo_due = -1.0
 	gate_plug = null
 	gate_pool = null
 	clack.stop()
@@ -641,16 +664,7 @@ func _process(delta: float) -> void:
 		elif squirt_jet_audio.playing:
 			squirt_jet_audio.stop()
 	if cricket_audio != null:
-		var warm_season := scene.world.season != View.SeasonProfile.Season.WINTER
-		var cricket_lvl := smoothstep(0.55, 1.55, scene.day_phase) * (1.0 - scene.rain.intensity * 0.85) if warm_season else 0.0
-		if cricket_lvl > 0.04:
-			if not cricket_audio.playing:
-				cricket_audio.volume_db = -60.0
-				cricket_audio.play()
-			var target_db := -24.5 + linear_to_db(clampf(cricket_lvl, 0.01, 1.0))
-			cricket_audio.volume_db = lerpf(cricket_audio.volume_db, target_db, 1.0 - exp(-delta * 2.2))
-		elif cricket_audio.playing:
-			cricket_audio.stop()
+		update_cricket_chorus(delta)
 	if breeze_audio != null and breeze_cooldown <= 0.0 and scene.rain.intensity < 0.25:
 		var gust_now := scene.wind.strength_at(0.5)
 		if gust_now > 0.62 and scene.world.season != View.SeasonProfile.Season.WINTER:
@@ -1213,8 +1227,66 @@ func update_seep_audio(delta: float, head: float) -> void:
 		seep_audio.play()
 		seep_cooldown = randf_range(lerpf(2.8, 1.8, high_pressure), lerpf(4.4, 3.0, high_pressure))
 
+func update_cricket_chorus(delta: float) -> void:
+	if cricket_streams.is_empty():
+		return
+	var season_weight := 0.0
+	match scene.world.season:
+		View.SeasonProfile.Season.SPRING:
+			season_weight = 0.42
+		View.SeasonProfile.Season.SUMMER:
+			season_weight = 0.86
+		View.SeasonProfile.Season.AUTUMN:
+			season_weight = 1.00
+		View.SeasonProfile.Season.WINTER:
+			season_weight = 0.0
+	var dusk_weight := smoothstep(0.68, 1.58, scene.day_phase)
+	var dry_weight := 1.0 - smoothstep(0.10, 0.55, scene.rain.intensity)
+	var level := season_weight * dusk_weight * dry_weight
+	if level <= 0.05:
+		cricket_bout_left = 0
+		cricket_echo_due = -1.0
+		cricket_cooldown = maxf(cricket_cooldown, 1.2)
+		return
+	if cricket_echo_due > 0.0:
+		cricket_echo_due -= delta
+		if cricket_echo_due <= 0.0 and cricket_echo_audio != null and not cricket_echo_audio.playing:
+			cricket_echo_audio.stream = cricket_streams[cricket_echo_voice]
+			cricket_echo_audio.pitch_scale = randf_range(0.95, 1.06)
+			cricket_echo_audio.volume_db = lerpf(-37.5, -32.0, level) + randf_range(-1.5, 1.0)
+			cricket_echo_audio.play()
+	cricket_cooldown -= delta
+	if cricket_cooldown > 0.0 or cricket_audio.playing:
+		return
+	if cricket_bout_left <= 0:
+		var r := randf()
+		if scene.world.season == View.SeasonProfile.Season.AUTUMN:
+			cricket_voice = 1 if r < 0.48 else (0 if r < 0.84 else 2)
+		else:
+			cricket_voice = 0 if r < 0.52 else (1 if r < 0.80 else 2)
+		cricket_voice_pitch = randf_range(0.95, 1.05)
+		cricket_voice_db = lerpf(-34.8, -28.6, level) + randf_range(-1.8, 1.2)
+		cricket_bout_left = randi_range(1, 3) if cricket_voice != 1 else randi_range(1, 2)
+	cricket_audio.stream = cricket_streams[cricket_voice]
+	cricket_audio.pitch_scale = cricket_voice_pitch * randf_range(0.988, 1.012)
+	cricket_audio.volume_db = cricket_voice_db + randf_range(-0.9, 0.9)
+	cricket_audio.play()
+	cricket_bout_left -= 1
+	if cricket_bout_left > 0:
+		cricket_cooldown = randf_range(0.84, 1.38) if cricket_voice == 1 else randf_range(0.62, 1.12)
+	else:
+		var base_rest := randf_range(2.8, 6.6)
+		cricket_cooldown = base_rest / lerpf(0.55, 1.0, level)
+		if level > 0.45 and randf() < 0.34 and cricket_echo_due <= 0.0:
+			cricket_echo_voice = (cricket_voice + (1 if randf() < 0.5 else 2)) % cricket_streams.size()
+			cricket_echo_due = randf_range(0.48, 1.18)
+
 func on_stone_splash(mass: float, strength: float) -> void:
 	scene.bird.disturb(scene.pointer, 85.0)
+	if strength > 0.35:
+		cricket_bout_left = 0
+		cricket_echo_due = -1.0
+		cricket_cooldown = maxf(cricket_cooldown, randf_range(2.2, 4.0))
 	if stone_splash != null:
 		stone_splash.pitch_scale = lerpf(1.24, 0.78, mass)
 		stone_splash.volume_db = lerpf(-31.0, -23.0, clampf(strength, 0.0, 1.0))

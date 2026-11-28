@@ -32,12 +32,24 @@ float branch_sway(vec2 p) {
 		mix(canopy_flutter.z, canopy_flutter.w, branch), tip);
 }
 
+float is_green_foliage(vec3 color) {
+	return smoothstep(0.010, 0.074, color.g - color.r * 0.85) * smoothstep(0.024, 0.124, color.g - color.b);
+}
+
 float foliage_color(vec3 color) {
-	float green_leaf = smoothstep(0.010, 0.074, color.g - color.r * 0.85) * smoothstep(0.024, 0.124, color.g - color.b);
+	float green_leaf = is_green_foliage(color);
 	// Also sway warm honey-gold/crimson autumn leaves and spring cherry blossoms.
 	float autumn_leaf = smoothstep(0.18, 0.36, color.r - color.b) * smoothstep(0.06, 0.24, color.r - color.g * 0.65) * smoothstep(0.12, 0.42, color.r);
 	float pink_blossom = smoothstep(0.08, 0.22, color.r - color.g) * smoothstep(0.62, 0.84, color.r) * smoothstep(0.55, 0.78, color.b);
 	return max(max(green_leaf, autumn_leaf * 0.85), pink_blossom * 0.80);
+}
+
+float is_warm_soil(vec3 col) {
+	// True green grass/foliage has g >= r; warm dirt and pale sand have r > g and r > b.
+	float true_green = smoothstep(-0.02, 0.04, col.g - col.r) * smoothstep(0.03, 0.12, col.g - col.b);
+	float red_leaf = smoothstep(0.22, 0.36, col.r - col.g) * (1.0 - smoothstep(0.42, 0.62, col.g));
+	float warmth = smoothstep(0.030, 0.13, col.r - col.b) * smoothstep(0.008, 0.055, col.r - col.g);
+	return warmth * (1.0 - true_green) * (1.0 - red_leaf);
 }
 
 float cast_leaf_shade(vec2 p, vec2 texel) {
@@ -112,7 +124,89 @@ void fragment() {
 	float track = sin(pixel.y * 0.112 + sin(pixel.x * 0.015) * 1.7 - pixel.x * 0.022);
 	float worn = path * soil * smoothstep(0.22, 0.76, patches * 0.80 + track * 0.20);
 	art = mix(art, art * vec3(0.93, 0.87, 0.82), worn * (0.38 + grain * 0.44));
-	art += vec3(0.054, 0.040, 0.022) * worn * step(0.83, grain);
+	art += vec3(0.054, 0.040, 0.022) * worn * step(0.83, grain) * (1.0 - winter_amount * 0.85);
+	// One soil, four seasonal states with genuinely shifting silhouettes & organic edge interlocking:
+	// Spring = softer damp rim with creeping moss/grass; Summer = crisp dry earth;
+	// Autumn = weathered gritty soil invaded by fallen-leaf debris; Winter = snowdrifts shrink bare
+	// earth down to a compact cold frozen patch around trampled spots and the campfire pit.
+	// Exclude canopy crowns and the wooden tree stump right beside the campfire from bare-soil reshaping.
+	float stump_mask = 1.0 - smoothstep(0.022, 0.044, length((p - vec2(0.803, 0.750)) * vec2(1.15, 1.0)));
+	float bare_soil = is_warm_soil(art) * (1.0 - smoothstep(0.45, 0.78, canopy_cover(p))) * (1.0 - stump_mask);
+	if (!independent_prop && bare_soil > 0.01) {
+		float soil_luma = dot(art, vec3(0.26, 0.63, 0.11));
+		// Probe surrounding pixels at 3 real 640x400 radii (5, 14, 26 texels) so seasonal snowdrifts,
+		// damp spring moss, and autumn leaf litter genuinely reshape bare-earth contours & interlock edges.
+		float n_tight = 0.0;
+		float n_mid = 0.0;
+		float n_deep = 0.0;
+		n_tight += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(5.0, 0.0) * texel).rgb);
+		n_tight += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(-5.0, 0.0) * texel).rgb);
+		n_tight += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(0.0, 5.0) * texel).rgb);
+		n_tight += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(0.0, -5.0) * texel).rgb);
+		n_mid += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(14.0, 4.0) * texel).rgb);
+		n_mid += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(-14.0, -4.0) * texel).rgb);
+		n_mid += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(-4.0, 13.0) * texel).rgb);
+		n_mid += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(4.0, -13.0) * texel).rgb);
+		n_deep += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(26.0, 6.0) * texel).rgb);
+		n_deep += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(-26.0, -6.0) * texel).rgb);
+		n_deep += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(6.0, 22.0) * texel).rgb);
+		n_deep += 1.0 - is_warm_soil(texture(TEXTURE, p + vec2(-6.0, -22.0) * texel).rgb);
+		float border_tight = clamp(n_tight * 0.34, 0.0, 1.0);
+		float border_mid = clamp((n_tight * 0.5 + n_mid) * 0.25, 0.0, 1.0);
+		float border_deep = clamp((n_tight * 0.35 + n_mid * 0.65 + n_deep) * 0.19, 0.0, 1.0);
+		// Quantized pixel-art jagged breakup so encroaching snow/grass/litter bites cleanly on pixel boundaries.
+		vec2 q_pix = floor(pixel / 2.0);
+		float jagged = earth_patch(q_pix / vec2(5.5, 4.2)) * 0.68 + grain * 0.32;
+
+		if (winter_amount > 0.01) {
+			// Hard, compact, cold trampled frozen gray-brown earth (matching frozen bank clods, never bright sand).
+			float hard_luma = pow(clamp(soil_luma, 0.0, 1.0), 1.35);
+			vec3 frozen_earth = mix(vec3(hard_luma), art * 0.68, 0.22) * vec3(0.58, 0.61, 0.68);
+			frozen_earth *= 0.85 + 0.24 * grain;
+			// Shrink exposed winter earth strongly: around the campfire, keep only a compact, jagged
+			// trampled frozen-earth footprint (~45% smaller than Summer's sandy clearing) hugged by crisp snowdrifts;
+			// elsewhere (upper path), let snowdrifts press deeply inward from all borders.
+			float pit_dist = length((p - hearth_light.xy) * vec2(1.12, 1.48));
+			float in_hearth_zone = 1.0 - smoothstep(0.14, 0.24, pit_dist);
+			float trampled = 1.0 - smoothstep(0.052, 0.095 + hearth_light.z * 0.012, pit_dist + (jagged - 0.5) * 0.042);
+			float path_drift = border_deep * 1.12 + jagged * 0.48;
+			float hearth_drift = (1.0 - trampled) * 0.88 + border_tight * 0.28 + (jagged - 0.45) * 0.36;
+			float drift_signal = mix(path_drift, hearth_drift, in_hearth_zone);
+			float drift_mask = smoothstep(0.44, 0.62, drift_signal);
+			vec3 snow_lit = vec3(0.84, 0.90, 0.97);
+			vec3 snow_edge = vec3(0.62, 0.72, 0.86);
+			float snow_core = smoothstep(0.58, 0.78, drift_signal);
+			vec3 snow_drift = mix(snow_edge, snow_lit, snow_core);
+			vec3 winter_ground = mix(frozen_earth, snow_drift, drift_mask);
+			// Crisp frosted rime specks & thin packed snow crumbs across remaining frozen dirt.
+			float rime_speck = step(0.76, grain) * (1.0 - trampled * 0.45);
+			winter_ground = mix(winter_ground, vec3(0.78, 0.85, 0.94), rime_speck * 0.30);
+			art = mix(art, winter_ground, bare_soil * winter_amount);
+		} else if (spring_amount > 0.01) {
+			// Spring: softer, damp muted earth with moist darkened rim & creeping tender green moss/grass bites.
+			vec3 spring_earth = mix(vec3(soil_luma), art, 0.82) * vec3(0.91, 0.89, 0.85);
+			float damp_rim = smoothstep(0.18, 0.72, border_mid * 0.85 + patches * 0.30);
+			spring_earth *= mix(vec3(1.0), vec3(0.79, 0.82, 0.78), damp_rim * 0.52);
+			float moss_bite = smoothstep(0.54, 0.74, border_mid * 0.95 + jagged * 0.44);
+			spring_earth = mix(spring_earth, vec3(0.40, 0.56, 0.24) * (0.76 + soil_luma * 0.44), moss_bite * 0.72);
+			art = mix(art, spring_earth, bare_soil * spring_amount * 0.88);
+		} else if (summer_amount > 0.01) {
+			// Summer: cleanest dry bright sunlit earth with restrained crisp grass teeth along the seam.
+			vec3 summer_earth = art * vec3(1.01, 0.99, 0.95);
+			float grass_tooth = smoothstep(0.62, 0.82, border_tight * 0.92 + jagged * 0.36);
+			summer_earth = mix(summer_earth, vec3(0.28, 0.46, 0.18) * (0.78 + soil_luma * 0.42), grass_tooth * 0.58);
+			art = mix(art, summer_earth, bare_soil * summer_amount * 0.78);
+		} else if (autumn_amount > 0.01) {
+			// Autumn: rougher weathered dry earth invaded around its borders by scattered dry leaf & humus litter.
+			vec3 autumn_earth = art * (0.92 + 0.14 * grain) * vec3(0.96, 0.92, 0.85);
+			float rough_rim = smoothstep(0.22, 0.74, border_mid * 0.88 + jagged * 0.38);
+			autumn_earth = mix(autumn_earth, autumn_earth * vec3(0.76, 0.70, 0.61), rough_rim * 0.52);
+			float leaf_debris = smoothstep(0.50, 0.74, border_mid * 0.88 + jagged * 0.48) * step(0.56, grain);
+			vec3 debris_col = mix(vec3(0.60, 0.32, 0.17), vec3(0.75, 0.49, 0.21), patches);
+			autumn_earth = mix(autumn_earth, debris_col, leaf_debris * 0.72);
+			art = mix(art, autumn_earth, bare_soil * autumn_amount * 0.90);
+		}
+	}
 
 	vec2 profile = texture(channel_profile, vec2(p.x, 0.5)).rg;
 	float side = sign(p.y - profile.x);
@@ -161,14 +255,16 @@ void fragment() {
 	land *= mix(vec3(1.0), vec3(0.75, 0.81, 0.89), soaked);
 	land += vec3(0.040, 0.055, 0.052) * soaked * green * smoothstep(0.47, 0.68, value) * (1.0 - twi * 0.55);
 	if (hearth_light.z > 0.005) {
-		vec2 fire_radius = vec2(0.155, 0.175) * (1.0 + dusk * 0.14 + twi * 0.38);
+		float evening_spread = dusk * 0.38 + twi * 0.78;
+		vec2 fire_radius = vec2(0.092, 0.112) * (1.0 + evening_spread);
 		vec2 fire_offset = (p - hearth_light.xy) / fire_radius;
-		float fire_falloff = pow(max(0.0, 1.0 - length(fire_offset)), 1.85);
+		float fire_falloff = pow(max(0.0, 1.0 - length(fire_offset)), 2.1);
 		float glow_grain = 0.86 + 0.28 * earth_patch(pixel / 3.5);
-		float evening_boost = 1.0 + dusk * 0.52 + twi * 1.28;
+		float day_restraint = 1.0 - winter_amount * (1.0 - dusk) * (1.0 - twi) * 0.42;
+		float evening_boost = (0.68 + dusk * 0.72 + twi * 1.52) * day_restraint;
 		float glow = fire_falloff * hearth_light.z * glow_grain * (0.72 + rain_wetness * 0.38) * evening_boost;
-		land += vec3(0.28, 0.132, 0.036) * glow * (0.48 + 0.52 * smoothstep(0.06, 0.50, value));
-		land = mix(land, land * vec3(1.18, 1.00, 0.84), min(0.76, glow * 0.72));
+		land += vec3(0.26, 0.122, 0.032) * glow * (0.48 + 0.52 * smoothstep(0.06, 0.50, value));
+		land = mix(land, land * vec3(1.16, 0.99, 0.84), min(0.72, glow * 0.68));
 	}
 	float mist = rain_intensity * (0.10 * (1.0 - p.y) + 0.035);
 	vec3 mist_color = mix(vec3(0.58, 0.66, 0.69), vec3(0.62, 0.52, 0.50), dusk * 0.75);

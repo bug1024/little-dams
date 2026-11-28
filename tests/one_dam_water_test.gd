@@ -663,6 +663,7 @@ func check_frog_and_loach() -> void:
 	view.frog.rng.seed = 0781
 	view.ground_insects.rng.seed = 0781
 	view.crab.rng.seed = 0781
+	view.summer.rng.seed = 0781
 	view.frog.croaked.connect(func() -> void: calls[0] += 1)
 	view.frog.landed.connect(func(_point: Vector2) -> void: hops[0] += 1)
 	var water_point := view.to_screen(Vector2(131, 0))
@@ -673,11 +674,21 @@ func check_frog_and_loach() -> void:
 		"A frog can be dragged into the creek and splashes on release")
 	frames(420)
 	expect(hops[0] > 0 and calls[0] > 0, "The frog hops and calls after being released")
-	view.summer.place_fish(Vector2(102, 0), true)
+	var start_loach := Vector2(102, 0)
+	for cand: Vector2 in [Vector2(102, 0), Vector2(72, 0), Vector2(158, 0)]:
+		var scr := view.to_screen(cand)
+		if view.frog.screen_point().distance_to(scr) > 12.0 and view.crab.position.distance_to(scr) > 12.0 and view.ground_insects.mole.position.distance_to(scr) > 12.0:
+			start_loach = cand
+			break
+	view.summer.place_fish(start_loach, true)
 	view.summer.fish_time = 1.0
 	pointer_button(view.to_screen(view.summer.fish), true)
 	var fish_held := view.summer.fish_held
 	var move_to := Vector2(229, 0)
+	for cand: Vector2 in [Vector2(229, 0), Vector2(188, 0), Vector2(262, 0)]:
+		if cand.distance_to(start_loach) > 30.0 and view.can_place_animal(view.to_screen(cand)):
+			move_to = cand
+			break
 	pointer_button(view.to_screen(move_to), false)
 	expect(fish_held and not view.summer.fish_held and view.summer.fish.is_equal_approx(move_to) and not view.summer.fish_stranded,
 		"The loach can be moved to another part of the creek")
@@ -1527,9 +1538,15 @@ func check_season_behaviors() -> void:
 	expect(near_fire_shelf.integrity < pre_melt and peak > 1000 and peak <= 32767,
 		"Lit campfire melts nearby winter ice and procedural ice crack audio synthesizes cleanly")
 
-	# Winter acoustic profile tunes creek crisper and quieter than summer.
-	expect(view.world.profile.creek_pitch_bias > 1.03 and view.world.profile.creek_db_bias < -1.5,
-		"Winter tunes creek acoustics crisper and calmer than warm seasons")
+	# Winter acoustic profile tunes creek crisper and quieter than summer, and frozen winter mud shifts cooler & frosted.
+	var winter_mud_tint := view.earth_season_tint(0.5)
+	var winter_earth_art := view.rock_art.for_earth(10.0, 0)
+	game.set_season(View.SeasonProfile.Season.SUMMER)
+	var summer_mud_tint := view.earth_season_tint(0.5)
+	game.set_season(View.SeasonProfile.Season.WINTER)
+	expect(view.world.profile.creek_pitch_bias > 1.03 and view.world.profile.creek_db_bias < -1.5
+		and winter_mud_tint.b > winter_mud_tint.r and summer_mud_tint.r > summer_mud_tint.b and winter_earth_art.snow_cap != null,
+		"Winter tunes creek acoustics crisper/calmer and shifts mud into cool frosted frozen earth")
 	game.restart()
 
 func check_abc_polish() -> void:
@@ -1598,10 +1615,19 @@ func check_abc_polish() -> void:
 	expect(summer_skaters >= 4 and winter_skaters == 0 and skater_burst > 18.0,
 		"Water striders thrive in Summer (%d), vanish in Winter (%d), and dart away on stone splash (%.1f)" % [summer_skaters, winter_skaters, skater_burst])
 
-	# 5. New evening cricket ambience & micro-foley buffers synthesize cleanly without clipping.
+	# 5. Evening cricket calls (3 organic non-looping voices) & micro-foley buffers synthesize cleanly without clipping.
 	var audio_ok := true
+	var cricket_nonloop := true
+	for v in 3:
+		var cw := game.WaterAudio.evening_crickets(v)
+		if cw.loop_mode != AudioStreamWAV.LOOP_DISABLED:
+			cricket_nonloop = false
+		var cpk := 0
+		for i in cw.data.size() / 2:
+			cpk = maxi(cpk, absi(cw.data.decode_s16(i * 2)))
+		if cpk <= 400 or cpk > 32767:
+			audio_ok = false
 	for wav: AudioStreamWAV in [
-		game.WaterAudio.evening_crickets(),
 		game.WaterAudio.leaf_rustle(),
 		game.WaterAudio.stake_foley(),
 		game.WaterAudio.scurry_foley(),
@@ -1611,7 +1637,7 @@ func check_abc_polish() -> void:
 			pk = maxi(pk, absi(wav.data.decode_s16(i * 2)))
 		if pk <= 400 or pk > 32767:
 			audio_ok = false
-	expect(audio_ok, "Evening cricket chorus, leaf rustle, stake foley, and animal scurry synthesize cleanly without clipping")
+	expect(audio_ok and cricket_nonloop, "Evening cricket calls (3 organic non-looping voices), leaf rustle, stake foley, and animal scurry synthesize cleanly without clipping")
 	game.restart()
 
 func check_music_cycle() -> void:

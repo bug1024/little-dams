@@ -1699,9 +1699,11 @@ func draw_dam_caulking(basin: Pool) -> void:
 				snap_pixel(mid + side * (half_len * 0.85) + dir * 1.6),
 				snap_pixel(mid - side * (half_len * 0.85) + dir * 1.5),
 			])
-			draw_colored_polygon(patch, shade_color(Color("#47301e", 0.72), mid))
+			var caulk_dark := Color("#43454a", 0.72) if world.season == SeasonProfile.Season.WINTER else Color("#473425", 0.72)
+			var caulk_lit := Color("#6a6c70", 0.78) if world.season == SeasonProfile.Season.WINTER else Color("#7d5e43", 0.78)
+			draw_colored_polygon(patch, shade_color(caulk_dark, mid))
 			draw_line(snap_pixel(mid - side * (half_len * 0.7)), snap_pixel(mid + side * (half_len * 0.7)),
-				shade_color(Color("#8c623d", 0.82), mid), 0.75)
+				shade_color(caulk_lit, mid), 0.75)
 
 func draw_materials() -> void:
 	var pieces := bank.duplicate()
@@ -2175,6 +2177,20 @@ func make_hearth_warm_face(stone: Pool.Piece) -> ImageTexture:
 			face.set_pixel(x, y, Color(warm, ink.a * weight))
 	return ImageTexture.create_from_image(face)
 
+func earth_season_tint(sunlight: float) -> Color:
+	# One shared earth texture modulated into four natural seasonal soil states:
+	# Spring = slightly damp soft muted brown, Summer = crisp sunlit earth,
+	# Autumn = dry slightly warm ochre-brown, Winter = desaturated cool frozen taupe-gray.
+	match world.season:
+		SeasonProfile.Season.SPRING:
+			return Color("#c4bab0").lerp(Color("#e4d9ce"), sunlight)
+		SeasonProfile.Season.SUMMER:
+			return Color("#d9cbbe").lerp(Color("#f5e7d5"), sunlight)
+		SeasonProfile.Season.WINTER:
+			return Color("#8594aa").lerp(Color("#a6b5cc"), sunlight)
+		_:
+			return Color("#d6c4b1").lerp(Color("#f2ddc5"), sunlight)
+
 func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersion: float, seated: bool, squash: float,
 		firelight := 0.0, hover_lift := 0.0) -> void:
 	var is_earth := piece.kind == Pool.EARTH
@@ -2183,6 +2199,7 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	var wear_scale := (1.0 - piece.wear * 0.30) if is_earth else 1.0
 	var seed := fposmod(piece.radius * 0.317 + piece.shade * 0.247, 1.0)
 	p = snap_pixel(p)
+	var winter := world.season == SeasonProfile.Season.WINTER
 	var effective_damp := maxf(damp, rain.wetness * 0.32)
 	if seated:
 		var foot := p + Vector2(-r * 0.08, r * (0.46 if is_earth else 0.52) * squash * wear_scale)
@@ -2190,7 +2207,8 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 			Vector2(0.56, -0.35), Vector2(0.94, -0.10), Vector2(0.56, 0.22), Vector2(-0.58, 0.28)])
 		for i in shadow.size():
 			shadow[i] = snap_pixel(foot + shadow[i] * r * wear_scale)
-		var shadow_dry := Color("#432b1ba6") if is_earth else Color("#281d18bc")
+		var earth_shadow := Color("#2a34449c") if winter else Color("#4330229e")
+		var shadow_dry := earth_shadow if is_earth else Color("#281d18bc")
 		var shadow_wet := Color("#1b323082") if is_earth else Color("#112a2a8c")
 		var shadow_col := shadow_dry.lerp(shadow_wet, effective_damp).lerp(Color("#112e3045"), smoothstep(0.06, 0.35, submersion))
 		if hover_lift > 0.0:
@@ -2199,7 +2217,8 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 		if is_earth and seed > 0.42 and r >= 6.0 and submersion <= 0.06:
 			for i in 3:
 				var pebble := snap_pixel(foot + Vector2((0.48 + i * 0.20) * r, (i % 2) * 1.5))
-				draw_rect(Rect2(pebble, Vector2(1.0 + (i % 2) * 0.5, 1.0)), shade_color(Color("#7f745b").lerp(Color("#435752"), effective_damp), pebble))
+				var peb_col := Color("#747e8c") if winter else Color("#7f745b")
+				draw_rect(Rect2(pebble, Vector2(1.0 + (i % 2) * 0.5, 1.0)), shade_color(peb_col.lerp(Color("#435752"), effective_damp), pebble))
 				draw_rect(Rect2(pebble + Vector2(0, 0.5), Vector2(1, 0.5)), shade_color(Color("#4c4a3c"), pebble))
 
 	var body_p := snap_pixel(p - Vector2(0.0, hover_lift))
@@ -2208,9 +2227,8 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	var origin := -size * 0.25
 	var sunlight := smoothstep(0.18, 0.77, body_p.x / SIZE.x + (1.0 - body_p.y / SIZE.y) * 0.34)
 	var env := env_modulate(body_p)
-	var winter := world.season == SeasonProfile.Season.WINTER
 	var stone_dry := Color("#a8badc").lerp(Color("#d8e4f7"), sunlight) if winter else Color("#dad1db").lerp(Color("#fff7ef"), sunlight)
-	var dry := (Color("#e0cfc4").lerp(Color("#fff5e6"), sunlight) if is_earth else stone_dry) * env
+	var dry := (earth_season_tint(sunlight) if is_earth else stone_dry) * env
 	if hover_lift > 0.0:
 		dry *= Color(1.13, 1.11, 1.07)
 	var water_row := clampi(roundi((r * (0.71 - submersion * 0.92) - origin.y) * 2.0), 0, int(size.y))
@@ -2242,7 +2260,7 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	if firelight > 0.01 and hearth_warm_faces.has(piece):
 		draw_texture_rect(hearth_warm_faces[piece], Rect2(origin, size * 0.5), false,
 			Color(dry, firelight * (1.0 - effective_damp * 0.44)))
-	if winter and not is_earth and carving.snow_cap != null and submersion <= 0.04 and effective_damp < 0.15:
+	if winter and carving.snow_cap != null and submersion <= 0.04 and effective_damp < 0.15:
 		var near_fire := hearth.firelight > 0.12 and body_p.distance_to(Hearth.CENTER) < 38.0
 		if not near_fire:
 			draw_texture_rect(carving.snow_cap, Rect2(origin, size * 0.5), false, env)

@@ -590,49 +590,130 @@ static func squirt_jet() -> AudioStreamWAV:
 	stream.loop_end = FRAMES
 	return stream
 
-static func evening_crickets() -> AudioStreamWAV:
-	const RATE := 22050
-	const DURATION := 4.2
-	const FRAMES := roundi(RATE * DURATION)
-	const FADE := 3200
+static func evening_crickets(variant: int = 0) -> AudioStreamWAV:
+	const RATE := 44100
+	var v := posmod(variant, 3)
+	# Three authentic countryside cricket voices (non-looping discrete chirps at 44.1 kHz):
+	# 0: creekside field cricket (蟋蟀, 4 crisp silvery ~32 Hz wing-strokes)
+	# 1: mellow autumn oil-gourd cricket (油葫芦, 7 gently swelling ~31 Hz rolling strokes)
+	# 2: distant grass bell-cricket (远处金钟儿/小蟋蟀, 5 delicate airy ~38 Hz strokes)
+	var duration := 0.28
+	var base_freq := 4580.0
+	var h2_gain := 0.11
+	var h3_gain := 0.030
+	var air_alpha := 0.76
+	var target_peak := 11200.0
+	var seed_val := 8461
+	var stroke_times: Array[float] = [0.012, 0.043, 0.074, 0.106]
+	var stroke_durs: Array[float] = [0.019, 0.021, 0.022, 0.022]
+	var stroke_amps: Array[float] = [0.42, 0.92, 1.00, 0.70]
+	var delays: Array[int] = [roundi(RATE * 0.023), roundi(RATE * 0.048), roundi(RATE * 0.079)]
+	if v == 1:
+		duration = 0.39
+		base_freq = 4080.0
+		h2_gain = 0.13
+		h3_gain = 0.035
+		air_alpha = 0.70
+		target_peak = 10800.0
+		seed_val = 8513
+		stroke_times = [0.014, 0.046, 0.078, 0.111, 0.144, 0.178, 0.213]
+		stroke_durs = [0.022, 0.025, 0.026, 0.027, 0.026, 0.025, 0.024]
+		stroke_amps = [0.22, 0.54, 0.86, 1.00, 0.92, 0.66, 0.34]
+		delays = [roundi(RATE * 0.026), roundi(RATE * 0.055), roundi(RATE * 0.088)]
+	elif v == 2:
+		duration = 0.29
+		base_freq = 5080.0
+		h2_gain = 0.08
+		h3_gain = 0.015
+		air_alpha = 0.54
+		target_peak = 8800.0
+		seed_val = 8573
+		stroke_times = [0.010, 0.036, 0.062, 0.089, 0.116]
+		stroke_durs = [0.016, 0.018, 0.019, 0.019, 0.018]
+		stroke_amps = [0.34, 0.78, 1.00, 0.82, 0.42]
+		delays = [roundi(RATE * 0.029), roundi(RATE * 0.060), roundi(RATE * 0.094)]
+
+	var frames := roundi(RATE * duration)
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 8461
-	var buffer := PackedFloat32Array()
-	buffer.resize(FRAMES + FADE)
-	var phase_a := 0.0
-	var phase_b := 0.0
-	for i in buffer.size():
-		var t := float(i) / RATE
-		# Two staggered soft field-cricket voices with warm rhythmic 3-pulse chirps.
-		var cyc_a := fposmod(t, 0.84)
-		var pulse_a := 0.0
-		if cyc_a < 0.36:
-			var sub := fposmod(cyc_a, 0.12) / 0.12
-			pulse_a = smoothstep(0.04, 0.25, sub) * (1.0 - smoothstep(0.55, 0.96, sub))
-		var cyc_b := fposmod(t + 0.43, 1.05)
-		var pulse_b := 0.0
-		if cyc_b < 0.28:
-			var sub := fposmod(cyc_b, 0.093) / 0.093
-			pulse_b = smoothstep(0.05, 0.28, sub) * (1.0 - smoothstep(0.58, 0.96, sub)) * 0.72
-		phase_a += TAU * (3860.0 + sin(TAU * 4.5 * t) * 18.0) / RATE
-		phase_b += TAU * (4290.0 + sin(TAU * 3.1 * t) * 22.0) / RATE
-		var voice_a := (sin(phase_a) * 0.78 + sin(phase_a * 2.0) * 0.12) * pulse_a
-		var voice_b := (sin(phase_b) * 0.74 + sin(phase_b * 1.5) * 0.10) * pulse_b
-		var air := rng.randf_range(-0.025, 0.025)
-		buffer[i] = (voice_a + voice_b) * 0.52 + air
+	rng.seed = seed_val
+	var filtered := PackedFloat32Array()
+	filtered.resize(frames)
+	var phase := 0.0
+	var active_freq := base_freq
+	var jitter_lp := 0.0
+	var res_r := 0.9945
+	var res_y1 := 0.0
+	var res_y2 := 0.0
+	var air_lp := 0.0
+	for i in frames:
+		var t := float(i) / float(RATE)
+		var drive := 0.0
+		var tooth_mod := 1.0
+		var freq_sum := 0.0
+		for k in stroke_times.size():
+			var local := t - stroke_times[k]
+			var dur := stroke_durs[k]
+			if local >= 0.0 and local < dur:
+				var u := local / dur
+				# Smooth biological bell pulse: natural rounded wing-closing stroke, zero flat plateau.
+				var env := pow(sin(PI * u), 1.35) * stroke_amps[k]
+				# Steady stiff wing-harp resonance with tiny <0.8% biological inflection (no pitch-drop beep).
+				var fk := base_freq * (1.0 + 0.004 * sin(PI * u) - 0.005 * u) - float(k) * 5.0
+				var tm := 0.94 + 0.06 * sin(TAU * 340.0 * local + float(k) * 1.3)
+				drive += env
+				freq_sum += fk * env
+				tooth_mod = lerpf(tooth_mod, tm, clampf(env, 0.0, 1.0))
+		if drive > 0.001:
+			active_freq = freq_sum / drive
+		var white := rng.randf_range(-1.0, 1.0)
+		jitter_lp += (white - jitter_lp) * 0.035
+		var inst_freq := active_freq * (1.0 + jitter_lp * 0.0025)
+		phase += TAU * inst_freq / float(RATE)
+		# High-Q resonant wing-harp membrane excited lightly by chitin friction (subtle living ring-down, no hiss).
+		var w := TAU * inst_freq / float(RATE)
+		var b1 := 2.0 * res_r * cos(w)
+		var b2 := -(res_r * res_r)
+		var res_y := (1.0 - res_r) * (white * drive * 2.2) + b1 * res_y1 + b2 * res_y2
+		res_y2 = res_y1
+		res_y1 = res_y
+		var harp := (sin(phase) * 0.84 + sin(phase * 2.0 + 0.35) * h2_gain + sin(phase * 3.0 + 0.8) * h3_gain) * drive * tooth_mod
+		var dry := harp * 0.82 + res_y * 0.36
+		air_lp += (dry - air_lp) * air_alpha
+		filtered[i] = air_lp
+
+	# Subtle outdoor tall-grass multi-tap diffuse reflection + clean edge ramps + peak normalization.
+	var wet_buf := PackedFloat32Array()
+	wet_buf.resize(frames)
+	var refl_lp := 0.0
+	var max_abs := 0.0001
+	var d1 := delays[0]
+	var d2 := delays[1]
+	var d3 := delays[2]
+	var refl_gain := 1.25 if v == 2 else 0.90
+	for i in frames:
+		var refl := 0.0
+		if i >= d1:
+			refl += filtered[i - d1] * 0.14
+		if i >= d2:
+			refl += filtered[i - d2] * 0.08
+		if i >= d3:
+			refl += filtered[i - d3] * 0.04
+		refl_lp += (refl - refl_lp) * 0.48
+		var t := float(i) / float(RATE)
+		var edge := smoothstep(0.0, 0.004, t) * (1.0 - smoothstep(duration - 0.022, duration, t))
+		var val := (filtered[i] + refl_lp * refl_gain) * edge
+		wet_buf[i] = val
+		max_abs = maxf(max_abs, absf(val))
+
 	var samples := PackedByteArray()
-	samples.resize(FRAMES * 2)
-	for i in FRAMES:
-		var value := buffer[i]
-		if i < FADE:
-			value = lerpf(buffer[FRAMES + i], value, smoothstep(0.0, 1.0, float(i) / FADE))
-		samples.encode_s16(i * 2, clampi(roundi(value * 9200.0), -32768, 32767))
+	samples.resize(frames * 2)
+	var scale := target_peak / max_abs
+	for i in frames:
+		samples.encode_s16(i * 2, clampi(roundi(wet_buf[i] * scale), -32768, 32767))
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS
 	stream.mix_rate = RATE
 	stream.data = samples
-	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
-	stream.loop_end = FRAMES
 	return stream
 
 static func leaf_rustle() -> AudioStreamWAV:
@@ -700,18 +781,18 @@ static func scurry_foley() -> AudioStreamWAV:
 	samples.resize(FRAMES * 2)
 	var hp_prev := 0.0
 	var lp := 0.0
-	var blip_p := 0.0
+	var mid := 0.0
 	for i in FRAMES:
 		var time := float(i) / RATE
 		var t := time / DURATION
-		var beats := 0.35 + 0.65 * pow(maxf(0.0, sin(TAU * 24.0 * time)), 1.4)
-		var env := smoothstep(0.0, 0.12, t) * (1.0 - smoothstep(0.40, 1.0, t)) * beats
+		var beats := 0.30 + 0.70 * pow(maxf(0.0, sin(TAU * 28.0 * time)), 1.6)
+		var env := smoothstep(0.0, 0.12, t) * (1.0 - smoothstep(0.38, 1.0, t)) * beats
 		var white := rng.randf_range(-1.0, 1.0)
 		var hp := white - hp_prev * 0.85
 		hp_prev = white
 		lp += (hp - lp) * 0.44
-		blip_p += TAU * lerpf(1550.0, 2250.0, t) / RATE
-		var sound := (lp * 1.15 + sin(blip_p) * 0.18) * env
+		mid += (white - mid) * 0.16
+		var sound := (lp * 1.18 + (mid - lp * 0.25) * 0.32) * env
 		samples.encode_s16(i * 2, clampi(roundi(sound * 8200.0), -32768, 32767))
 	var stream := AudioStreamWAV.new()
 	stream.format = AudioStreamWAV.FORMAT_16_BITS

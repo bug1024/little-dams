@@ -498,6 +498,32 @@ func draw_land(canvas: Node2D, tint_at: Callable = Callable(), season_id := &"au
 			canvas.draw_rect(Rect2(pt + Vector2(0.25, -1.75), Vector2(0.5, 0.5)), apply_tint(bloom_y, pt, tint_at))
 
 	draw_cicada_perch(canvas, tint_at, season_id)
+	# Season-specific micro edge-interlocking along the hearth clearing & upper path border so bare earth
+	# feels naturally invaded by spring damp moss, summer tufts, autumn litter, or winter snow crusts.
+	if season_id == &"spring":
+		for pt: Vector2 in [Vector2(211, 166), Vector2(226, 178), Vector2(256, 166), Vector2(265, 152), Vector2(146, 36)]:
+			var p := snap(pt)
+			canvas.draw_rect(Rect2(p + Vector2(-1.5, 0.0), Vector2(3.0, 1.0)), apply_tint(Color("#548536", 0.78), p, tint_at))
+			canvas.draw_rect(Rect2(p + Vector2(-0.5, -1.0), Vector2(1.0, 1.0)), apply_tint(Color("#88bf4e", 0.84), p, tint_at))
+	elif season_id == &"summer":
+		for pt: Vector2 in [Vector2(212, 167), Vector2(258, 164), Vector2(236, 178)]:
+			var p := snap(pt)
+			canvas.draw_rect(Rect2(p + Vector2(-1.0, 0.0), Vector2(2.5, 1.0)), apply_tint(Color("#366126", 0.74), p, tint_at))
+			canvas.draw_line(p, p + Vector2(0.5, -2.0), apply_tint(Color("#5a8c36", 0.82), p, tint_at), 0.5)
+	elif season_id == &"autumn":
+		for row: Vector3 in [
+			Vector3(212, 164, 0.4), Vector3(221, 173, -0.8), Vector3(244, 174, 1.1),
+			Vector3(259, 162, -0.5), Vector3(264, 150, 0.7), Vector3(132, 34, -1.2),
+			Vector3(160, 42, 0.6), Vector3(178, 28, 2.2),
+		]:
+			var lc := Color("#b85b2c") if int(row.x) % 2 == 0 else Color("#d18e3b")
+			draw_litter_leaf(canvas, Vector2(row.x, row.y), row.z, apply_tint(lc, Vector2(row.x, row.y), tint_at))
+	elif season_id == &"winter":
+		# Small encroaching snow-crust patches & frosty pebbles biting into the shrunken frozen hearth border.
+		for pt: Vector2 in [Vector2(211, 166), Vector2(218, 174), Vector2(255, 168), Vector2(264, 155), Vector2(246, 176)]:
+			var p := snap(pt)
+			canvas.draw_rect(Rect2(p + Vector2(-2.0, 0.0), Vector2(4.0, 1.5)), apply_tint(Color("#9bb3cc", 0.72), p, tint_at))
+			canvas.draw_rect(Rect2(p + Vector2(-1.5, -0.5), Vector2(3.0, 1.0)), apply_tint(Color("#dceaf7", 0.84), p, tint_at))
 	for leaf in [Vector3(58, 155, -0.7), Vector3(60.5, 154, 0.6), Vector3(59, 157, 2.9),
 			Vector3(187, 151, 0.4), Vector3(196, 46, -1.7), Vector3(109, 169, 2.8)]:
 		draw_litter_leaf(canvas, Vector2(leaf.x, leaf.y), leaf.z, apply_tint(litter_a, Vector2(leaf.x, leaf.y), tint_at))

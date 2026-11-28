@@ -80,6 +80,13 @@ void fragment() {
 	gravel *= 0.94 + 0.16 * veins;
 	float damp = max(smoothstep(0.008, 0.050, depth), shore.r * 0.86);
 	vec3 damp_gravel = gravel * vec3(0.61, 0.72, 0.75);
+	// In Winter, pull warm gravel & wet shore stones toward chilled, low-saturation slate pebbles.
+	if (winter_amount > 0.01) {
+		float g_luma = dot(gravel, vec3(0.26, 0.63, 0.11));
+		gravel = mix(gravel, mix(vec3(g_luma), gravel, 0.35) * vec3(0.78, 0.84, 0.93), winter_amount * 0.85);
+		float dg_luma = dot(damp_gravel, vec3(0.26, 0.63, 0.11));
+		damp_gravel = mix(damp_gravel, mix(vec3(dg_luma), damp_gravel, 0.32) * vec3(0.74, 0.83, 0.95), winter_amount * 0.88);
+	}
 	float shade = canopy_cover(art_uv);
 	float moss = bank * damp * smoothstep(0.50, 0.79, patches + veins * 0.17 + shade * 0.15) * (1.0 - winter_amount * 0.88);
 	damp_gravel = mix(damp_gravel, vec3(0.20, 0.26, 0.14) * (0.79 + pebble * 0.48), moss * 0.75);
@@ -121,6 +128,15 @@ void fragment() {
 	float algae = slow * (1.0 - deep) * smoothstep(0.42, 0.76, patches + veins * 0.19 + shade * 0.11) * (1.0 - winter_amount);
 	water = mix(water, vec3(0.23, 0.27, 0.17), algae * (0.19 + summer_amount * 0.06));
 	water = mix(water, sediment, min(0.87, silt * (1.0 - deep * 0.87) * 0.39 + state.a * 0.69));
+	// Unify Winter creek with frigid snowy banks: lower saturation, strip summer emerald-green,
+	// shift toward quiet, clear steel-slate / glacial ice-blue with faint cold sky reflection.
+	if (winter_amount > 0.01) {
+		float w_luma = dot(water, vec3(0.26, 0.63, 0.11));
+		vec3 cold_water = mix(vec3(w_luma), water, 0.34) * vec3(0.74, 0.87, 1.03);
+		float cold_sky = (0.12 + slow * 0.15 + held_water * 0.16) * (1.0 - shade * 0.62) * (1.0 - twi * 0.75);
+		cold_water = mix(cold_water, vec3(0.66, 0.78, 0.90), clamp(cold_sky, 0.0, 0.28));
+		water = mix(water, cold_water, winter_amount);
+	}
 
 	float breeze = wind_at(art_uv.x);
 	float lit = 1.0 - shade * (0.65 + summer_amount * 0.14 - spring_amount * 0.08);
@@ -148,9 +164,10 @@ void fragment() {
 	water = mix(water, chop_col, chop * paws * (0.055 + sun * 0.27));
 
 	float bend = sin(motion.y * 0.16) * 1.79 + sin(motion.x * 0.027 + motion.y * 0.061);
-	float ripple = step(0.959, sin(motion.x * 0.105 + bend));
+	float ripple = step(0.959 + winter_amount * 0.012, sin(motion.x * 0.105 + bend));
 	ripple *= step(0.61, cos(motion.y * 0.38 + motion.x * 0.064));
-	water = mix(water, vec3(0.55, 0.79, 0.76), ripple * (0.058 + speed * 0.24) * (1.0 - held_water * 0.42));
+	vec3 ripple_col = mix(vec3(0.55, 0.79, 0.76), vec3(0.68, 0.79, 0.90), winter_amount);
+	water = mix(water, ripple_col, ripple * (0.058 + speed * 0.24) * (1.0 - held_water * 0.42) * (1.0 - winter_amount * 0.36));
 	float broken_crest = step(0.66, earth_patch(motion / vec2(12.0, 2.6)));
 	float front = max(0.0, texture(surge_field, vec2(art_uv.x - 0.016, 0.5)).r -
 		texture(surge_field, vec2(art_uv.x + 0.016, 0.5)).r);
@@ -171,10 +188,12 @@ void fragment() {
 	float foam = meniscus * (0.09 + pool_extent * 0.15 + broken_foam * (running * 0.32 + push * 0.28));
 	float backwash = 1.0 - smoothstep(0.31, 1.04, abs(bank_dist - line_center - 2.7 - push));
 	foam += backwash * broken_foam * (running * 0.085 + push * 0.10);
-	water = mix(water, vec3(0.73, 0.85, 0.78), foam * bank_foam * smoothstep(-0.004, 0.019, waterline));
+	vec3 foam_col = mix(vec3(0.73, 0.85, 0.78), vec3(0.80, 0.88, 0.95), winter_amount);
+	water = mix(water, foam_col, foam * bank_foam * (1.0 - winter_amount * 0.24) * smoothstep(-0.004, 0.019, waterline));
 
 	float value = dot(water, vec3(0.26, 0.63, 0.11));
-	water = mix(water, value * vec3(0.86, 1.01, 0.99), 0.18 + deep * 0.08);
+	vec3 final_aqua = mix(vec3(0.86, 1.01, 0.99), vec3(0.82, 0.93, 1.04), winter_amount);
+	water = mix(water, value * final_aqua, 0.18 + deep * 0.08);
 	// A moving film can still trace the pebbles below a nearly drained dam.
 	float trickle = smoothstep(0.009, 0.072, depth) * smoothstep(0.018, 0.14, speed) * (1.0 - shelf * 0.75);
 	cover = mix(cover, 1.0, trickle * 0.45);
