@@ -18,6 +18,7 @@ const SeasonProfile = preload("res://game/world/season_profile.gd")
 const WorldState = preload("res://game/world/world_state.gd")
 const WorldStimulus = preload("res://game/world/world_stimulus.gd")
 const CreekFlora = preload("res://game/world/creek_flora.gd")
+const GroundTraces = preload("res://game/world/ground_traces.gd")
 const Hearth = preload("res://game/one_dam_hearth.gd")
 const Scenery = preload("res://game/one_dam_scenery.gd")
 const SIZE := Vector2(320, 200)
@@ -129,6 +130,9 @@ var squirt_gun := SquirtGun.new()
 var world := WorldState.new()
 var stimuli := WorldStimulus.new()
 var flora := CreekFlora.new()
+var ground_traces := GroundTraces.new()
+var terrain_sprite: Sprite2D
+var water_sprite: Sprite2D
 var wind := Wind.new()
 var rain := Rain.new()
 var hearth := Hearth.new()
@@ -191,9 +195,11 @@ func _ready() -> void:
 	ground.z_index = -2
 	ground.material = ground_light
 	add_child(ground)
+	terrain_sprite = ground
 	background.name = &"WaterSurface"
 	background.material = surface
 	add_child(background)
+	water_sprite = background
 	scenery.install(self, ground_light)
 	scenery.foreground.draw.connect(draw_shore_foreground)
 
@@ -255,8 +261,10 @@ func clear() -> void:
 	squirt_gun.reset()
 	hovered_squirt_gun = false
 	squirt_mouse_down = false
-	world.reset(world.season)
+	world.reset(SeasonProfile.Season.SPRING)
+	apply_season_visuals(world.season)
 	flora.reset()
+	ground_traces.clear()
 	summer.fish_held = false
 	summer.fish_stranded = false
 	summer.fish_released = false
@@ -477,6 +485,8 @@ func floater_at(cursor: Vector2) -> Floater:
 	var best := INF
 	for item in floaters:
 		if item.forage != Forage.NONE:
+			if world.season == SeasonProfile.Season.WINTER and item.rooted and item.forage == Forage.FLOWER:
+				continue
 			var base := forage_screen(item)
 			var tip := base + forage_axis(item)
 			var near := Geometry2D.get_closest_point_to_segment(cursor, base, tip).distance_to(cursor)
@@ -516,9 +526,17 @@ func place_floater(item: Floater, cursor: Vector2) -> void:
 	if not can_place_floater(item, cursor):
 		return
 	if hearth.contains(cursor):
+		if item.forage == Forage.NONE and not item.twig:
+			hearth.flare_tinder(0.20, 5)
+			floaters.erase(item)
+			return
+		if item.soaked >= 0.35 and hearth.burning:
+			hearth.douse(0.22, true)
 		hearth.add(item.is_firewood())
 		floaters.erase(item)
 		return
+	if item.rooted and item.forage in [Forage.FLOWER, Forage.FOXTAIL]:
+		ground_traces.add_pluck_mark(to_screen(item.shore))
 	item.point = from_screen(cursor)
 	item.rooted = false
 	item.host = null
@@ -539,7 +557,10 @@ func place_floater(item: Floater, cursor: Vector2) -> void:
 		burst(item.point, 0.15)
 
 func can_fuel_hearth(item: Floater) -> bool:
-	return (item.is_firewood() or item.forage == Forage.DRY_GRASS) and item.soaked < 0.35 and (
+	if item.forage == Forage.NONE and not item.twig:
+		return hearth.burning and not item.afloat and item.soaked < 0.35
+	var dry_ok := item.soaked < 0.35 or (hearth.burning and hearth.heat > 0.25)
+	return (item.is_firewood() or item.forage == Forage.DRY_GRASS) and dry_ok and (
 		not item.afloat and (not item.planted or not is_wet(item.point))) and hearth.can_add(item.is_firewood())
 
 func ignite_hearth(point: Vector2) -> bool:
@@ -551,6 +572,38 @@ func ignite_hearth(point: Vector2) -> bool:
 
 func set_day_stage(stage: int) -> void:
 	day_target = float(clampi(stage, 0, 2))
+
+func set_season(next_season: SeasonProfile.Season) -> void:
+	world.set_season(next_season)
+	apply_season_visuals(next_season)
+	# Sync wildflowers and foxtails to the active season palette.
+	var fcols: Array[Color] = world.profile.flower_colors
+	var fxcols: Array[Color] = world.profile.foxtail_colors
+	var f_idx := 0
+	var fx_idx := 0
+	for item in floaters:
+		if item.forage == Forage.FLOWER and not fcols.is_empty():
+			item.tint = fcols[f_idx % fcols.size()]
+			f_idx += 1
+		elif item.forage == Forage.FOXTAIL and not fxcols.is_empty():
+			item.tint = fxcols[fx_idx % fxcols.size()]
+			fx_idx += 1
+	if world.profile.species_weight(&"cicada") <= 0.05:
+		summer.cicada_singing = false
+		summer.cicada_sing_level = 0.0
+	queue_redraw()
+
+func apply_season_visuals(season: SeasonProfile.Season) -> void:
+	var ground_tex := Scenery.ground_for_season(season)
+	if terrain_sprite != null:
+		terrain_sprite.texture = ground_tex
+	if water_sprite != null:
+		water_sprite.texture = PLATE if season == SeasonProfile.Season.AUTUMN else ground_tex
+	painted_ground = ground_tex.get_image()
+	scenery.set_season(season)
+	var winter_val := 1.0 if season == SeasonProfile.Season.WINTER else 0.0
+	ground_light.set_shader_parameter("winter_amount", winter_val)
+	surface.set_shader_parameter("winter_amount", winter_val)
 
 func current_day_stage() -> int:
 	if day_phase < 0.5:
@@ -598,18 +651,46 @@ func register_stimulus_listeners() -> void:
 			summer.disturb_water(ev.world_pos, ev.strength, true)
 	)
 	stimuli.subscribe(&"floaters_and_boat", func(ev: WorldStimulus.Stimulus) -> void:
-		if ev.kind != WorldStimulus.Kind.WATER_JET:
-			return
-		var dir := ev.velocity.normalized() if ev.velocity.length_squared() > 0.01 else Vector2.RIGHT
-		if boat.afloat and not boat.held and boat.screen_pos(to_screen, pointer).distance_to(ev.screen_pos) < 12.0:
-			boat.nudge(dir * (14.5 * ev.strength))
-		for item in floaters:
-			if item.afloat and item != held_floater and to_screen(item.point).distance_to(ev.screen_pos) < 9.5:
-				item.drift = (item.drift + dir * (9.5 * ev.strength)).limit_length(74.0)
+		if ev.kind == WorldStimulus.Kind.WATER_JET:
+			var dir := ev.velocity.normalized() if ev.velocity.length_squared() > 0.01 else Vector2.RIGHT
+			if boat.burned_timer <= 0.0 and not boat.held and boat.screen_pos(to_screen, pointer).distance_to(ev.screen_pos) < 13.0:
+				boat.soak(0.11 * ev.strength)
+				if boat.afloat:
+					boat.nudge(dir * (14.5 * ev.strength))
+			for item in floaters:
+				if item == held_floater:
+					continue
+				var item_pt := forage_screen(item) if item.forage != Forage.NONE else to_screen(item.point)
+				if item_pt.distance_to(ev.screen_pos) < 10.5:
+					if item.afloat:
+						item.drift = (item.drift + dir * (9.5 * ev.strength)).limit_length(74.0)
+					if item.is_firewood() or item.forage == Forage.DRY_GRASS or (item.forage == Forage.NONE and not item.twig):
+						item.soaked = minf(1.0, item.soaked + 0.28 * ev.strength)
+		elif ev.kind == WorldStimulus.Kind.SPLASH and ev.wet:
+			# Radial splash wave from dropped stones rocks and pushes nearby paper boat & floaters.
+			if boat.afloat and not boat.held and boat.burned_timer <= 0.0:
+				var boat_pt := boat.screen_pos(to_screen, pointer)
+				var delta := boat_pt - ev.screen_pos
+				var dist := delta.length()
+				if dist < 38.0:
+					var falloff := 1.0 - dist / 38.0
+					var push_dir := delta.normalized() if dist > 0.5 else Vector2.RIGHT
+					boat.nudge(push_dir * (22.0 * falloff * ev.strength))
+					boat.soak(0.06 * falloff * ev.strength)
+			for item in floaters:
+				if item.afloat and item != held_floater:
+					var delta := to_screen(item.point) - ev.screen_pos
+					var dist := delta.length()
+					if dist < 34.0:
+						var falloff := 1.0 - dist / 34.0
+						var push_dir := delta.normalized() if dist > 0.5 else Vector2.RIGHT
+						item.drift = (item.drift + push_dir * (16.0 * falloff * ev.strength)).limit_length(72.0)
 	)
 	stimuli.subscribe(&"hearth", func(ev: WorldStimulus.Stimulus) -> void:
-		if ev.kind == WorldStimulus.Kind.WATER_JET and hearth.contains(ev.screen_pos):
-			hearth.douse(0.075 * ev.strength)
+		if ev.kind == WorldStimulus.Kind.WATER_JET and (hearth.contains(ev.screen_pos) or ev.screen_pos.distance_to(Hearth.CENTER) < 15.0):
+			hearth.douse(0.12 * ev.strength, true)
+		elif ev.kind == WorldStimulus.Kind.SPLASH and ev.wet and ev.screen_pos.distance_to(Hearth.CENTER) < 30.0:
+			hearth.douse(0.08 * ev.strength, true)
 	)
 	stimuli.subscribe(&"dam_earth", func(ev: WorldStimulus.Stimulus) -> void:
 		if ev.kind != WorldStimulus.Kind.WATER_JET:
@@ -633,6 +714,16 @@ func register_stimulus_listeners() -> void:
 				summer.cicada_singing = false
 				summer.cicada_sing_level = 0.0
 				summer.cicada_startled.emit()
+		elif ev.kind == WorldStimulus.Kind.SPLASH and ev.wet:
+			if not crab.held and crab.position.distance_to(ev.screen_pos) < 26.0:
+				crab.alert = maxf(crab.alert, 0.90)
+				crab.snip = maxf(crab.snip, 0.80)
+			if not frog.held and frog.duration <= 0.0 and frog.screen_point().distance_to(ev.screen_pos) < 24.0:
+				frog.pause = minf(frog.pause, 0.06)
+	)
+	stimuli.subscribe(&"ground_traces", func(ev: WorldStimulus.Stimulus) -> void:
+		if ev.kind == WorldStimulus.Kind.WATER_JET and not ev.wet and on_bank(ev.screen_pos) and not hearth.contains(ev.screen_pos):
+			ground_traces.add_damp_spot(ev.screen_pos, 3.2 + ev.strength * 1.8)
 	)
 
 func on_squirt_impact(screen_pt: Vector2, vel: Vector2, pressure: float, wet_hit: bool) -> void:
@@ -782,20 +873,38 @@ func advance(dt: float) -> void:
 	var lower_p := pool_profile(lower, 262.0)
 	var pool_richness := smoothstep(0.16, 0.52, maxf(upper_p.y, lower_p.y))
 	world.sync(day_phase, rain.intensity, rain.wetness, rain.after_rain, wind.strength_at(0.5), pool_richness, hearth.firelight)
+	ground_traces.advance(dt, world, Hearth.CENTER, hearth.firelight)
+	# Cross-object thermal & flood physics: campfire warmth dries nearby damp items; high water douses fire.
+	if hearth.firelight > 0.12:
+		if not boat.afloat and not boat.held and boat.burned_timer <= 0.0:
+			var b_dist := boat.screen_pos(to_screen, pointer).distance_to(Hearth.CENTER)
+			if b_dist < 46.0:
+				boat.dry_near_fire(dt * hearth.firelight * (1.0 - b_dist / 46.0) * 0.55)
+		for item in floaters:
+			if item.soaked > 0.0 and not item.afloat and item != held_floater:
+				var f_pt := forage_screen(item) if item.forage != Forage.NONE else to_screen(item.point)
+				var f_dist := f_pt.distance_to(Hearth.CENTER)
+				if f_dist < 46.0:
+					item.soaked = maxf(0.0, item.soaked - dt * hearth.firelight * (1.0 - f_dist / 46.0) * 0.55)
+	if hearth.burning and water.depth_at(from_screen(Hearth.CENTER)) > 0.06:
+		hearth.douse(dt * 1.4, true)
 	if rain.after_rain > 0.85 and not post_rain_nudged:
 		post_rain_nudged = true
 		frog.nudge_call(2.2)
 	elif rain.after_rain < 0.10:
 		post_rain_nudged = false
 	summer.advance(dt, water, rain.intensity, day_phase, pool_richness, rain.after_rain)
-	ground_insects.frog_blocker = frog.position if frog.duration <= 0.0 else Vector2.INF
+	if world.profile.species_weight(&"cicada") <= 0.05:
+		summer.cicada_singing = false
+		summer.cicada_sing_level = 0.0
+	ground_insects.frog_blocker = frog.position if (frog.duration <= 0.0 and world.profile.species_weight(&"frog") > 0.05) else Vector2.INF
 	ground_insects.crab_blocker = crab.position if not crab.held else Vector2.INF
 	refresh_insect_terrain()
 	bird.advance(dt, pointer, rain.intensity, ground_insects.rocks, bird_spot_wet,
 		day_phase, rain.after_rain, rain.active_puddle_spots(), Hearth.CENTER, hearth.firelight > 0.15)
 	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple, day_phase)
 	var twilight_calm := smoothstep(1.10, 1.85, day_phase)
-	var frog_activity := clampf(maxf(smoothstep(0.80, 1.85, day_phase), rain.after_rain * 0.85), 0.0, 1.0)
+	var frog_activity := clampf(maxf(smoothstep(0.80, 1.85, day_phase), rain.after_rain * 0.85), 0.0, 1.0) * world.profile.species_weight(&"frog")
 	frog.advance(dt, frog_clear, frog_activity, twilight_calm)
 	var pointer_busy := holding_animal() or held != null or held_pipe != null or held_floater != null or squirt_gun.held
 	crab.advance(dt, pointer, pointer_busy, ground_insects.rocks, to_screen, from_screen, insect_in_water,
@@ -913,15 +1022,17 @@ func grab_animal(point: Vector2) -> bool:
 	if crab.position.distance_to(point) <= 7.5:
 		crab.held = true
 		return true
-	if summer.cicada_position.distance_to(point) <= 6.0:
+	if world.profile.species_weight(&"cicada") > 0.05 and summer.cicada_position.distance_to(point) <= 6.0:
 		summer.grab_cicada()
 		return true
-	summer.insect_held = summer.insect_position.distance_to(point) <= 9.0
-	if summer.insect_held:
-		return true
-	frog.held = frog.screen_point().distance_to(point) <= 7.0
-	if frog.held:
-		return true
+	if world.profile.species_weight(&"dragonfly") > 0.05:
+		summer.insect_held = summer.insect_position.distance_to(point) <= 9.0
+		if summer.insect_held:
+			return true
+	if world.profile.species_weight(&"frog") > 0.05:
+		frog.held = frog.screen_point().distance_to(point) <= 7.0
+		if frog.held:
+			return true
 	summer.fish_held = summer.fish_time >= 0.25 and to_screen(summer.fish).distance_to(point) <= 7.0
 	return summer.fish_held
 
@@ -986,12 +1097,12 @@ func animal_hover_target(point: Vector2) -> Vector3:
 		return Vector3(mantis_pos.x, mantis_pos.y, 7.5)
 	if crab.position.distance_to(point) <= 7.5:
 		return Vector3(crab.position.x, crab.position.y, 6.5)
-	if summer.cicada_position.distance_to(point) <= 6.0:
+	if world.profile.species_weight(&"cicada") > 0.05 and summer.cicada_position.distance_to(point) <= 6.0:
 		return Vector3(summer.cicada_position.x, summer.cicada_position.y, 6.0)
-	if summer.insect_position.distance_to(point) <= 9.0:
+	if world.profile.species_weight(&"dragonfly") > 0.05 and summer.insect_position.distance_to(point) <= 9.0:
 		return Vector3(summer.insect_position.x, summer.insect_position.y, 5.5)
 	var frog_pos := frog.screen_point()
-	if frog_pos.distance_to(point) <= 7.0:
+	if world.profile.species_weight(&"frog") > 0.05 and frog_pos.distance_to(point) <= 7.0:
 		return Vector3(frog_pos.x, frog_pos.y, 6.0)
 	if summer.fish_time >= 0.25:
 		var fish_pos := to_screen(summer.fish)
@@ -1050,7 +1161,8 @@ func _draw() -> void:
 	draw_shore_bubbles()
 	flora.draw(self, world, shade_color, foam_ink())
 	rain.draw_puddles(self)
-	summer.draw_land(self, shade_color)
+	ground_traces.draw(self, shade_color)
+	summer.draw_land(self, shade_color, world.profile.id)
 	var hearth_hover := hearth.contains(pointer) and (hearth.can_ignite() if held_floater == null else can_fuel_hearth(held_floater))
 	hearth.draw_bed(self, hearth_hover)
 	if hovered_hearth:
@@ -1059,7 +1171,8 @@ func _draw() -> void:
 	for stone in hearth_rim:
 		var reflection := hearth.firelight * (1.0 - smoothstep(5.0, 16.0, stone.point.length()))
 		draw_rock(stone, Hearth.CENTER + stone.point, 0.0, maxf(hearth.dampness * 0.5, rain.wetness * 0.24), 0.0, true, 0.83, reflection)
-	ground_insects.draw(self, pointer, true, scenery.in_front_of_ledge, false, shade_color)
+	var mantis_ok := world.profile.species_weight(&"mantis") > 0.05
+	ground_insects.draw(self, pointer, true, scenery.in_front_of_ledge, false, shade_color, mantis_ok)
 	draw_materials()
 	draw_pipes()
 	draw_seams(model)
@@ -1068,12 +1181,13 @@ func _draw() -> void:
 	draw_breach_jet(lower_breach)
 	draw_froth()
 	draw_floaters()
-	ground_insects.draw(self, pointer, false, scenery.in_front_of_ledge, false, shade_color)
-	summer.draw_insect(self, pointer, shade_color)
-	if not scenery.in_front_of_ledge(pointer if summer.cicada_held else summer.cicada_position):
+	ground_insects.draw(self, pointer, false, scenery.in_front_of_ledge, false, shade_color, mantis_ok)
+	if world.profile.species_weight(&"dragonfly") > 0.05 or summer.insect_held:
+		summer.draw_insect(self, pointer, shade_color)
+	if (world.profile.species_weight(&"cicada") > 0.05 or summer.cicada_held) and not scenery.in_front_of_ledge(pointer if summer.cicada_held else summer.cicada_position):
 		summer.draw_cicada(self, pointer, shade_color)
 	summer.draw_fish(self, to_screen, pointer, true)
-	if not scenery.in_front_of_ledge(pointer if frog.held else frog.position):
+	if (world.profile.species_weight(&"frog") > 0.05 or frog.held) and not scenery.in_front_of_ledge(pointer if frog.held else frog.position):
 		frog.draw(self, pointer, shade_color)
 	if (not crab.wet or crab.held) and not scenery.in_front_of_ledge(pointer if crab.held else crab.position):
 		crab.draw(self, pointer, shade_color)
@@ -1083,17 +1197,18 @@ func _draw() -> void:
 
 func draw_shore_foreground() -> void:
 	var layer := scenery.foreground
-	ground_insects.draw(layer, pointer, true, scenery.in_front_of_ledge, true, shade_color)
-	ground_insects.draw(layer, pointer, false, scenery.in_front_of_ledge, true, shade_color)
-	if scenery.in_front_of_ledge(pointer if summer.cicada_held else summer.cicada_position):
+	var mantis_ok := world.profile.species_weight(&"mantis") > 0.05
+	ground_insects.draw(layer, pointer, true, scenery.in_front_of_ledge, true, shade_color, mantis_ok)
+	ground_insects.draw(layer, pointer, false, scenery.in_front_of_ledge, true, shade_color, mantis_ok)
+	if (world.profile.species_weight(&"cicada") > 0.05 or summer.cicada_held) and scenery.in_front_of_ledge(pointer if summer.cicada_held else summer.cicada_position):
 		summer.draw_cicada(layer, pointer, shade_color)
-	if scenery.in_front_of_ledge(pointer if frog.held else frog.position):
+	if (world.profile.species_weight(&"frog") > 0.05 or frog.held) and scenery.in_front_of_ledge(pointer if frog.held else frog.position):
 		frog.draw(layer, pointer, shade_color)
 	if (not crab.wet or crab.held) and scenery.in_front_of_ledge(pointer if crab.held else crab.position):
 		crab.draw(layer, pointer, shade_color)
 	if bird.is_airborne() or scenery.in_front_of_ledge(bird.position):
 		bird.draw(layer, shade_color)
-	rain.draw_drops(layer)
+	rain.draw_drops(layer, world.season == SeasonProfile.Season.WINTER)
 	squirt_gun.draw_stream(layer, shade_color, foam_ink())
 	if squirt_gun.held:
 		squirt_gun.draw_gun(layer, pointer, shade_color, foam_ink())
@@ -1488,9 +1603,10 @@ func draw_materials() -> void:
 			var water_height: float = maxf(0.0, depth - 0.09) * 18.0 - piece.visible_lift
 			submersion = clampf(water_height / (piece.radius * 0.80), 0.0, 0.88)
 		p.x += piece.notch * 4.5
-		draw_piece(piece, p, piece.notch * 0.27, damp, submersion, piece.support == null, 0.84 if built else 1.0)
+		var hover_lift := 1.0 if (piece == hovered and held == null) else 0.0
+		draw_piece(piece, p, piece.notch * 0.27, damp, submersion, piece.support == null, 0.84 if built else 1.0, hover_lift)
 		if piece == hovered:
-			draw_hover_halo(self, p, piece.radius + 2.5, piece.radius * 0.72 + 2.5)
+			draw_hover_halo(self, p - Vector2(0.0, hover_lift), piece.radius + 2.5, piece.radius * 0.72 + 2.5)
 	for item in rolling:
 		var piece: Pool.Piece = item.piece
 		var p := to_screen(item.point) - Vector2(0, item.lift)
@@ -1564,7 +1680,10 @@ func draw_drop_hint(canvas: Node2D) -> void:
 		else:
 			draw_cross_badge(canvas, pointer + Vector2(0, 2.0))
 	elif boat.held:
-		if clear_drop:
+		if hearth.contains(pointer) and hearth.burning:
+			var fire_ring := Color("#9de4dc", 0.86) if boat.soaked >= 0.45 else Color("#f79b59", 0.88)
+			draw_dashed_ellipse(canvas, Hearth.CENTER, Hearth.RADIUS.x + 1.0, Hearth.RADIUS.y + 1.0, fire_ring, Color("#2b1c12b0"))
+		elif clear_drop:
 			var in_water := is_wet(from_screen(pointer)) and not on_bank(pointer)
 			var ring := Color("#c7f2df", 0.84) if in_water else Color("#f2dfb2", 0.78)
 			draw_dashed_ellipse(canvas, snap_pixel(pointer + Vector2(0, 2.0)), 6.5, 3.2, ring, Color("#1c2924a8"), 12)
@@ -1711,6 +1830,8 @@ func forage_axis(item: Floater) -> Vector2:
 	return Vector2(2.0 + light, -length)
 
 func draw_forage(item: Floater, carried: bool) -> void:
+	if not carried and world.season == SeasonProfile.Season.WINTER and item.rooted and item.forage == Forage.FLOWER:
+		return
 	var base := snap_pixel(pointer + Vector2(0, 2) if carried else forage_screen(item))
 	var axis := forage_axis(item) if not carried else Vector2(2, -forage_axis(item).length())
 	var tip := snap_pixel(base + axis)
@@ -1832,8 +1953,9 @@ func dampness(piece: Pool.Piece) -> float:
 	var wet := maxf(shore_memory[i] * 0.84, smoothstep(0.015, 0.12, water.depth[i]))
 	return wet * (1.0 - smoothstep(0.0, 12.0, piece.visible_lift))
 
-func draw_piece(piece: Pool.Piece, p: Vector2, roll: float, damp := 0.0, submersion := 0.0, seated := false, squash := 1.0) -> void:
-	draw_rock(piece, p, roll, damp, submersion, seated, squash)
+func draw_piece(piece: Pool.Piece, p: Vector2, roll: float, damp := 0.0, submersion := 0.0, seated := false, squash := 1.0,
+		hover_lift := 0.0) -> void:
+	draw_rock(piece, p, roll, damp, submersion, seated, squash, 0.0, hover_lift)
 
 func make_hearth_warm_face(stone: Pool.Piece) -> ImageTexture:
 	var face := rock_art.for_piece(stone.radius, stone.shade).texture.get_image()
@@ -1852,7 +1974,7 @@ func make_hearth_warm_face(stone: Pool.Piece) -> ImageTexture:
 	return ImageTexture.create_from_image(face)
 
 func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersion: float, seated: bool, squash: float,
-		firelight := 0.0) -> void:
+		firelight := 0.0, hover_lift := 0.0) -> void:
 	var is_earth := piece.kind == Pool.EARTH
 	squash *= 1.0 - sin(piece.bounce * PI) * (0.16 if is_earth else 0.08)
 	var r := piece.radius
@@ -1861,14 +1983,16 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	p = snap_pixel(p)
 	var effective_damp := maxf(damp, rain.wetness * 0.32)
 	if seated:
-		var foot := p + Vector2(-r * 0.12, r * (0.56 if is_earth else 0.66) * squash * wear_scale)
-		var shadow := PackedVector2Array([Vector2(-1.02, 0.02), Vector2(-0.68, -0.33),
-			Vector2(0.54, -0.34), Vector2(0.91, -0.11), Vector2(0.53, 0.21), Vector2(-0.57, 0.27)])
+		var foot := p + Vector2(-r * 0.08, r * (0.46 if is_earth else 0.52) * squash * wear_scale)
+		var shadow := PackedVector2Array([Vector2(-1.04, 0.02), Vector2(-0.70, -0.34),
+			Vector2(0.56, -0.35), Vector2(0.94, -0.10), Vector2(0.56, 0.22), Vector2(-0.58, 0.28)])
 		for i in shadow.size():
 			shadow[i] = snap_pixel(foot + shadow[i] * r * wear_scale)
-		var shadow_dry := Color("#4d3d2c96") if is_earth else Color("#24231da8")
-		var shadow_wet := Color("#1b32307e") if is_earth else Color("#112a2a84")
+		var shadow_dry := Color("#432b1ba6") if is_earth else Color("#281d18bc")
+		var shadow_wet := Color("#1b323082") if is_earth else Color("#112a2a8c")
 		var shadow_col := shadow_dry.lerp(shadow_wet, effective_damp).lerp(Color("#112e3045"), smoothstep(0.06, 0.35, submersion))
+		if hover_lift > 0.0:
+			shadow_col.a *= 0.84
 		draw_colored_polygon(shadow, shadow_col)
 		if is_earth and seed > 0.42 and r >= 6.0 and submersion <= 0.06:
 			for i in 3:
@@ -1876,14 +2000,17 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 				draw_rect(Rect2(pebble, Vector2(1.0 + (i % 2) * 0.5, 1.0)), shade_color(Color("#7f745b").lerp(Color("#435752"), effective_damp), pebble))
 				draw_rect(Rect2(pebble + Vector2(0, 0.5), Vector2(1, 0.5)), shade_color(Color("#4c4a3c"), pebble))
 
+	var body_p := snap_pixel(p - Vector2(0.0, hover_lift))
 	var carving: RockArt.Rock = rock_art.for_earth(r, piece.shade) if is_earth else rock_art.for_piece(r, piece.shade)
 	var size := carving.texture.get_size()
 	var origin := -size * 0.25
-	var sunlight := smoothstep(0.18, 0.77, p.x / SIZE.x + (1.0 - p.y / SIZE.y) * 0.34)
-	var env := env_modulate(p)
-	var dry := (Color("#e0cfc4").lerp(Color("#fff5e6"), sunlight) if is_earth else Color("#dad1db").lerp(Color("#fff7ef"), sunlight)) * env
+	var sunlight := smoothstep(0.18, 0.77, body_p.x / SIZE.x + (1.0 - body_p.y / SIZE.y) * 0.34)
+	var env := env_modulate(body_p)
+	var winter := world.season == SeasonProfile.Season.WINTER
+	var stone_dry := Color("#a8badc").lerp(Color("#d8e4f7"), sunlight) if winter else Color("#dad1db").lerp(Color("#fff7ef"), sunlight)
+	var dry := (Color("#e0cfc4").lerp(Color("#fff5e6"), sunlight) if is_earth else stone_dry) * env
 	var water_row := clampi(roundi((r * (0.71 - submersion * 0.92) - origin.y) * 2.0), 0, int(size.y))
-	draw_set_transform(p, roll, Vector2(wear_scale, squash * wear_scale))
+	draw_set_transform(body_p, roll, Vector2(wear_scale, squash * wear_scale))
 	if submersion > 0.06 and water_row < int(size.y):
 		if water_row > 0:
 			var upper_strip := Rect2(0, 0, size.x, water_row)
@@ -1911,14 +2038,18 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	if firelight > 0.01 and hearth_warm_faces.has(piece):
 		draw_texture_rect(hearth_warm_faces[piece], Rect2(origin, size * 0.5), false,
 			Color(dry, firelight * (1.0 - effective_damp * 0.44)))
+	if winter and not is_earth and carving.snow_cap != null and submersion <= 0.04 and effective_damp < 0.15:
+		var near_fire := hearth.firelight > 0.12 and body_p.distance_to(Hearth.CENTER) < 38.0
+		if not near_fire:
+			draw_texture_rect(carving.snow_cap, Rect2(origin, size * 0.5), false, env)
 	draw_set_transform(Vector2.ZERO)
 	if submersion > 0.13 and water_row < carving.rim.size():
 		var rim := carving.rim[water_row]
 		var width := (rim.y - rim.x) * 0.5 * wear_scale
 		if width >= 2.0:
-			var left_x := p.x + (origin.x + rim.x * 0.5) * wear_scale
+			var left_x := body_p.x + (origin.x + rim.x * 0.5) * wear_scale
 			var right_x := left_x + width
-			var water_y := p.y + (origin.y + water_row * 0.5) * squash * wear_scale
+			var water_y := body_p.y + (origin.y + water_row * 0.5) * squash * wear_scale
 			draw_piece_water_contact(piece, water_y, left_x, right_x, submersion)
 
 func draw_piece_water_contact(piece: Pool.Piece, water_y: float, left_x: float, right_x: float, submersion: float) -> void:

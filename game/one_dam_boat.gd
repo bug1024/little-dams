@@ -19,6 +19,7 @@ var soaked := 0.0
 var bounce := 0.0
 var ripple_due := 0.0
 var clock := 0.0
+var burned_timer := 0.0
 
 func reset(unproject: Callable) -> void:
 	shore = unproject.call(HOME) if unproject.is_valid() else HOME
@@ -34,6 +35,7 @@ func reset(unproject: Callable) -> void:
 	bounce = 0.0
 	ripple_due = 0.0
 	clock = 0.0
+	burned_timer = 0.0
 
 func screen_pos(project: Callable, pointer: Vector2) -> Vector2:
 	if held:
@@ -42,7 +44,24 @@ func screen_pos(project: Callable, pointer: Vector2) -> Vector2:
 	return base - Vector2(0.0, bob)
 
 func hit_test(cursor: Vector2, project: Callable, pointer: Vector2) -> bool:
+	if burned_timer > 0.0:
+		return false
 	return screen_pos(project, pointer).distance_to(cursor) <= 7.5
+
+func burn_away() -> void:
+	held = false
+	afloat = false
+	caught = false
+	drift = Vector2.ZERO
+	soaked = 0.0
+	burned_timer = 4.5
+
+func soak(amount: float) -> void:
+	soaked = clampf(soaked + amount, 0.0, 1.0)
+	bounce = maxf(bounce, 0.35)
+
+func dry_near_fire(amount: float) -> void:
+	soaked = maxf(0.0, soaked - amount)
 
 func place(cursor: Vector2, unproject: Callable, wet: bool) -> void:
 	held = false
@@ -69,6 +88,19 @@ func advance(dt: float, water, wind: Wind, rain_intensity: float, surge_fn: Call
 	if dt <= 0.0:
 		return
 	clock += dt
+	if burned_timer > 0.0:
+		burned_timer = maxf(0.0, burned_timer - dt)
+		if burned_timer <= 0.0:
+			position = shore
+			afloat = false
+			caught = false
+			drift = Vector2.ZERO
+			angle = -0.18
+			bob = 0.0
+			roll = 0.0
+			soaked = 0.0
+			bounce = 0.65
+		return
 	bounce = move_toward(bounce, 0.0, dt * 4.4)
 	if held:
 		bob = 0.0
@@ -172,6 +204,8 @@ func apply_tint(color: Color, at: Vector2, tint_at: Callable) -> Color:
 	return tint_at.call(color, at) if tint_at.is_valid() else color
 
 func draw(canvas: Node2D, project: Callable, pointer: Vector2, tint_at: Callable, foam_col: Color) -> void:
+	if burned_timer > 0.0:
+		return
 	var p := snap(screen_pos(project, pointer))
 	var squash := 1.0 - sin(bounce * PI) * 0.14
 	var facing := 1.0 if cos(angle) >= 0.0 else -1.0

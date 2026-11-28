@@ -3,8 +3,8 @@ extends RefCounted
 # Single runtime source of truth for season, time-of-day, weather, and species activity queries.
 const SeasonProfile = preload("res://game/world/season_profile.gd")
 
-var season := SeasonProfile.Season.AUTUMN
-var profile: SeasonProfile = SeasonProfile.for_season(SeasonProfile.Season.AUTUMN)
+var season := SeasonProfile.Season.SPRING
+var profile: SeasonProfile = SeasonProfile.for_season(SeasonProfile.Season.SPRING)
 var day_phase := 0.0
 var rain_intensity := 0.0
 var rain_wetness := 0.0
@@ -17,7 +17,7 @@ func set_season(next_season: SeasonProfile.Season) -> void:
 	season = next_season
 	profile = SeasonProfile.for_season(next_season)
 
-func reset(default_season := SeasonProfile.Season.AUTUMN) -> void:
+func reset(default_season := SeasonProfile.Season.SPRING) -> void:
 	set_season(default_season)
 	day_phase = 0.0
 	rain_intensity = 0.0

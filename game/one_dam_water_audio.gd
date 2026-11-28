@@ -308,6 +308,33 @@ static func hearth_ignite() -> AudioStreamWAV:
 	stream.data = samples
 	return stream
 
+static func steam_hiss() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.42
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7331
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var lp := 0.0
+	var hp := 0.0
+	var prev := 0.0
+	for i in FRAMES:
+		var t := float(i) / float(FRAMES)
+		var env := smoothstep(0.0, 0.06, t) * (1.0 - smoothstep(0.22, 1.0, t))
+		var white := rng.randf_range(-1.0, 1.0)
+		# Crisp high-frequency sizzle band (water hitting hot embers) + faint crackle.
+		hp = 0.72 * (hp + white - prev)
+		prev = white
+		lp += (hp - lp) * 0.48
+		var fizz := lp * (1.0 + 0.25 * sin(t * 95.0))
+		samples.encode_s16(i * 2, clampi(roundi(fizz * env * 15500.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
 static func shutter_click() -> AudioStreamWAV:
 	const RATE := 22050
 	const DURATION := 0.12

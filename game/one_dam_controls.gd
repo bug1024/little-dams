@@ -1,6 +1,6 @@
 extends RefCounted
 
-enum Action { RELEASE, RESTART, RAIN, TIME, MUSIC }
+enum Action { RELEASE, RESTART, RAIN, TIME, SEASON, MUSIC }
 
 # Each character is drawn on the same pixel grid as the scene and cursor.
 const GLYPHS := {
@@ -109,20 +109,60 @@ const GLYPHS := {
 		"...######...", "############", "..#......#..", ".#.######.#.",
 		"#..#....#..#", "...######...", "...#....#...", "...######...",
 	],
+	"雪": [
+		".##########.", ".....#......", "############", "#..#.#..#..#",
+		"#..#.#..#..#", ".....#......", "..########..", ".........#..",
+		"..########..", ".........#..", "..########..", "............",
+	],
+	"春": [
+		".....#......", "..########..", ".....#......", "...######...",
+		"....#..#....", ".##########.", "...#....#...", "..#.####.#..",
+		".#..#..#..#.", "....####....", "....#..#....", "....####....",
+	],
+	"夏": [
+		".##########.", ".....#......", "...######...", "...#....#...",
+		"...######...", "...#....#...", "...######...", "....#.......",
+		"...######...", "..#....#....", "....##.#....", "..##....##..",
+	],
+	"秋": [
+		"..###...#...", ".##.....#...", "...#....#...", "#####.#.#.#.",
+		"...#..#.#.#.", "..###...#...", ".#.#.#..#...", ".#.#.#.#.#..",
+		"...#...#.#..", "...#..#...#.", "...#.#....#.", "...#.......#",
+	],
+	"冬": [
+		"....#.......", "...######...", "..#.....#...", ".#..#..#....",
+		".....##.....", "...##..##...", ".##......##.", ".....##.....",
+		"......#.....", "............", ".....###....", ".......##...",
+	],
+	"季": [
+		"....#####...", ".###........", ".....#......", ".##########.",
+		"...#.#.#....", "..#..#..#...", ".#...#...#..", "...######...",
+		"......#.....", ".##########.", ".....#......", "...###......",
+	],
+	"S": [
+		"............", "..########..", ".#..........", ".#..........",
+		"..#######...", ".........#..", ".........#..", ".........#..",
+		".........#..", ".#.......#..", "..#######...", "............",
+	],
 }
 const RIPPLE := ["....#....", "...###...", "..#####..", "..#####..", "...###...", ".........", ".##...##.", "...###..."]
 const RETURN := ["..#......", ".##.###..", "###....#.", ".##.....#", "..#.....#", "........#", ".#.....#.", "..#####.."]
 const CLOUD := ["...###...", "..#...#..", ".#.....#.", "#########", ".........", ".#..#..#.", "#..#..#..", "........."]
+const SNOW_CLOUD := ["...###...", "..#...#..", ".#.....#.", "#########", ".........", ".#..#..#.", "...#...#.", ".#...#..."]
 const SUN := ["....#....", ".#..#..#.", "..#####..", "##.###.##", "..#####..", ".#..#..#.", "....#....", "........."]
 const SUNSET := ["....#....", ".#.....#.", "..#####..", ".#######.", "#########", ".........", ".#######.", "..#####.."]
 const MOON := ["...###...", ".####....", "####.....", "####.....", "####.....", ".####..#.", "..######.", "....##..."]
+const BLOSSOM := ["...###...", "..#####..", "##.###.##", "###.#.###", "##.###.##", "..#####..", "...#.#...", "........."]
+const LEAF_SUMMER := [".....###.", "...#####.", "..###.##.", ".###.#...", ".####....", "..###....", ".#.......", "#........"]
+const MAPLE := ["....#....", "..#.#.#..", ".#######.", "##.###.##", ".#######.", "..#####..", "....#....", "....#...."]
+const SNOWFLAKE := ["....#....", ".#..#..#.", "..#####..", "#########", "..#####..", ".#..#..#.", "....#....", "........."]
 const NOTE := [".....###.", ".....#..#", ".....#...", ".....#...", ".....#...", "..####...", ".#####...", "..###...."]
 const NOTE_OFF := ["#....###.", ".#...#..#", "..#..#...", "...#.#...", "....##...", "..##.#...", ".####..#.", "..###..#."]
 const UNIT := 2
 const FONT_SIZE := 24
 const CELL := FONT_SIZE + UNIT
 const BUTTON_HEIGHT := 48
-const BUTTON_WIDTHS := [118, 110, 118, 118, 148]
+const BUTTON_WIDTHS := [118, 110, 118, 118, 118, 148]
 
 var lettering := make_lettering()
 
@@ -156,14 +196,30 @@ func apply_plaque_theme(button: Button, width: int, wood: Color, highlight := Co
 			text_color = Color("#cfc4a8")
 		button.add_theme_color_override("font_color" if state == "normal" else "font_" + state + "_color", text_color)
 
-func set_rain_active(button: Button, active: bool) -> void:
+func set_rain_active(button: Button, active: bool, snow_mode := false) -> void:
 	var width: int = BUTTON_WIDTHS[Action.RAIN]
 	if active:
-		apply_plaque_theme(button, width, Color("#42504d"), Color("#85b3af"))
-		button.icon = make_icon(Action.RAIN, false, true)
+		apply_plaque_theme(button, width, Color("#3e4c59") if snow_mode else Color("#42504d"),
+			Color("#9ec4e0") if snow_mode else Color("#85b3af"))
+		button.icon = make_rain_icon(true, snow_mode)
 	else:
 		apply_plaque_theme(button, width, Color("#574a3b"))
-		button.icon = make_icon(Action.RAIN, false, false)
+		button.icon = make_rain_icon(false, snow_mode)
+
+func set_season(button: Button, season: int) -> void:
+	var width: int = BUTTON_WIDTHS[Action.SEASON]
+	var clamped := clampi(season, 0, 3)
+	button.text = ["春季", "夏季", "秋季", "冬季"][clamped]
+	match clamped:
+		0:
+			apply_plaque_theme(button, width, Color("#5d4847"), Color("#e8a8bc"))
+		1:
+			apply_plaque_theme(button, width, Color("#44543c"), Color("#94c965"))
+		2:
+			apply_plaque_theme(button, width, Color("#5d4633"), Color("#e09b4a"))
+		_:
+			apply_plaque_theme(button, width, Color("#3d4a59"), Color("#9cc2e3"))
+	button.icon = make_season_icon(clamped)
 
 func set_time_stage(button: Button, stage: int) -> void:
 	var width: int = BUTTON_WIDTHS[Action.TIME]
@@ -210,12 +266,32 @@ func make_lettering() -> FontFile:
 func make_icon(variant: Action, muted := false, active := false) -> ImageTexture:
 	if variant == Action.TIME:
 		return make_time_icon(0)
+	if variant == Action.SEASON:
+		return make_season_icon(0)
+	if variant == Action.RAIN:
+		return make_rain_icon(active, false)
 	var bitmap := Image.create_empty(20, 20, false, Image.FORMAT_RGBA8)
-	var pattern: Array = [RIPPLE, RETURN, CLOUD, SUN, NOTE_OFF if muted else NOTE][variant]
+	var pattern: Array = [RIPPLE, RETURN, CLOUD, SUN, BLOSSOM, NOTE_OFF if muted else NOTE][variant]
 	var tint: Color = [Color("#9ed6c1"), Color("#ddba83"),
 		Color("#c4f0f5") if active else Color("#b7cfd4"),
 		Color("#f2ce78"),
+		Color("#f5bfd0"),
 		Color("#958e7c") if muted else Color("#e1c79b")][variant]
+	ink(bitmap, pattern, Vector2i(0, UNIT), UNIT, tint)
+	return ImageTexture.create_from_image(bitmap)
+
+func make_rain_icon(active: bool, snow_mode: bool) -> ImageTexture:
+	var bitmap := Image.create_empty(20, 20, false, Image.FORMAT_RGBA8)
+	var pattern: Array = SNOW_CLOUD if snow_mode else CLOUD
+	var tint := (Color("#e8f4fc") if active else Color("#c9dceb")) if snow_mode else (Color("#c4f0f5") if active else Color("#b7cfd4"))
+	ink(bitmap, pattern, Vector2i(0, UNIT), UNIT, tint)
+	return ImageTexture.create_from_image(bitmap)
+
+func make_season_icon(season: int) -> ImageTexture:
+	var bitmap := Image.create_empty(20, 20, false, Image.FORMAT_RGBA8)
+	var idx := clampi(season, 0, 3)
+	var pattern: Array = [BLOSSOM, LEAF_SUMMER, MAPLE, SNOWFLAKE][idx]
+	var tint: Color = [Color("#f7c2d2"), Color("#9fd669"), Color("#f0a84a"), Color("#dcedfa")][idx]
 	ink(bitmap, pattern, Vector2i(0, UNIT), UNIT, tint)
 	return ImageTexture.create_from_image(bitmap)
 

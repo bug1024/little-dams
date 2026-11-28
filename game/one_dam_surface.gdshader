@@ -15,6 +15,7 @@ uniform float bed_refraction : hint_range(0.0, 1.0) = 1.0;
 uniform float bank_foam : hint_range(0.0, 1.0) = 1.0;
 uniform vec4 wind_travel;
 uniform float rain_intensity;
+uniform float winter_amount = 0.0;
 uniform vec3 hearth_light = vec3(0.73125, 0.77, 0.0);
 const vec2 WIND = vec2(0.94, 0.34);
 
@@ -77,7 +78,7 @@ void fragment() {
 	float damp = max(smoothstep(0.008, 0.050, depth), shore.r * 0.86);
 	vec3 damp_gravel = gravel * vec3(0.61, 0.72, 0.75);
 	float shade = canopy_cover(art_uv);
-	float moss = bank * damp * smoothstep(0.50, 0.79, patches + veins * 0.17 + shade * 0.15);
+	float moss = bank * damp * smoothstep(0.50, 0.79, patches + veins * 0.17 + shade * 0.15) * (1.0 - winter_amount * 0.88);
 	damp_gravel = mix(damp_gravel, vec3(0.20, 0.26, 0.14) * (0.79 + pebble * 0.48), moss * 0.75);
 
 	float deep = smoothstep(0.19, 0.70, depth);
@@ -106,9 +107,10 @@ void fragment() {
 	vec3 shallow_water = submerged_plate * vec3(0.81, 0.86, 0.83) + vec3(0.036, 0.022, 0.005);
 	shallow_water = mix(shallow_water, damp_gravel * vec3(0.85, 1.09, 1.14), 0.30 + bank * 0.21);
 	vec3 pool = mix(vec3(0.073, 0.19, 0.23), plate * vec3(0.51, 0.63, 0.80), 0.54);
+	pool = mix(pool, vec3(0.09, 0.22, 0.32), winter_amount * 0.30);
 	vec3 water = mix(shallow_water, pool, deep * 0.90);
 	water = mix(water, water * vec3(0.62, 0.76, 0.88) + vec3(0.004, 0.009, 0.016), held_water * 0.76);
-	float algae = slow * (1.0 - deep) * smoothstep(0.42, 0.76, patches + veins * 0.19 + shade * 0.11);
+	float algae = slow * (1.0 - deep) * smoothstep(0.42, 0.76, patches + veins * 0.19 + shade * 0.11) * (1.0 - winter_amount);
 	water = mix(water, vec3(0.23, 0.27, 0.17), algae * 0.19);
 	water = mix(water, sediment, min(0.87, silt * (1.0 - deep * 0.87) * 0.39 + state.a * 0.69));
 

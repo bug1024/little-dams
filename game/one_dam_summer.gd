@@ -421,30 +421,58 @@ func draw_fish(canvas: Node2D, project: Callable, pointer: Vector2, foreground :
 func apply_tint(color: Color, at: Vector2, tint_at: Callable) -> Color:
 	return tint_at.call(color, at) if tint_at.is_valid() else color
 
-func draw_land(canvas: Node2D, tint_at: Callable = Callable()) -> void:
+func draw_land(canvas: Node2D, tint_at: Callable = Callable(), season_id := &"autumn") -> void:
+	var root_col := Color("#333d20")
+	var base_col := Color("#454c2d")
+	var stem_a := Color("#596332")
+	var stem_b := Color("#7a7b42")
+	var litter_a := Color("#96744a")
+	var litter_b := Color("#766145")
+	match season_id:
+		&"spring":
+			root_col = Color("#2e4a22")
+			base_col = Color("#466e31")
+			stem_a = Color("#63943c")
+			stem_b = Color("#87b84f")
+			litter_a = Color("#eab7c4")
+			litter_b = Color("#d99aae")
+		&"summer":
+			root_col = Color("#223d1c")
+			base_col = Color("#345c28")
+			stem_a = Color("#4a8034")
+			stem_b = Color("#6ba342")
+			litter_a = Color("#587a3b")
+			litter_b = Color("#4b6935")
+		&"winter":
+			root_col = Color("#4c4d4a")
+			base_col = Color("#6e6b62")
+			stem_a = Color("#989080")
+			stem_b = Color("#c8d2dc")
+			litter_a = Color("#8f8375")
+			litter_b = Color("#b8c4cf")
 	for i in SEDGES.size():
 		var data: Vector3 = SEDGES[i]
 		var root := Vector2(data.x, data.y)
-		canvas.draw_rect(Rect2((root * 2.0).round() * 0.5 - Vector2(1.5, 0.5), Vector2(3.0, 1.25)), apply_tint(Color("#333d20"), root, tint_at))
+		canvas.draw_rect(Rect2((root * 2.0).round() * 0.5 - Vector2(1.5, 0.5), Vector2(3.0, 1.25)), apply_tint(root_col, root, tint_at))
 		for stem in (4 if data.z >= 5.0 else 3):
 			var span := (stem - 1.4) * 2.0
 			var height := data.z * (0.73 + stem % 3 * 0.16)
 			var sway := plant_sway(i, stem)
 			var split := root + Vector2(span * 0.37 + sway * 0.19, -height * 0.54)
 			var tip := plant_tip(i, stem)
-			var ink := Color("#596332") if stem % 2 == 0 else Color("#7a7b42")
-			canvas.draw_line(root, split, apply_tint(Color("#454c2d"), root, tint_at), 0.5)
+			var ink := stem_a if stem % 2 == 0 else stem_b
+			canvas.draw_line(root, split, apply_tint(base_col, root, tint_at), 0.5)
 			canvas.draw_line(split, tip, apply_tint(ink, root, tint_at), 0.5)
 			var blade := split.lerp(tip, 0.53)
 			canvas.draw_line(blade, blade + Vector2(1.0 + sway * 0.6, -1.1), apply_tint(ink.lightened(0.11), root, tint_at), 0.5)
 
-	draw_cicada_perch(canvas, tint_at)
+	draw_cicada_perch(canvas, tint_at, season_id)
 	for leaf in [Vector3(58, 155, -0.7), Vector3(60.5, 154, 0.6), Vector3(59, 157, 2.9),
 			Vector3(187, 151, 0.4), Vector3(196, 46, -1.7), Vector3(109, 169, 2.8)]:
-		draw_litter_leaf(canvas, Vector2(leaf.x, leaf.y), leaf.z, apply_tint(Color("#96744a"), Vector2(leaf.x, leaf.y), tint_at))
+		draw_litter_leaf(canvas, Vector2(leaf.x, leaf.y), leaf.z, apply_tint(litter_a, Vector2(leaf.x, leaf.y), tint_at))
 
 	# Litter caught at breaks in the rock bank.
-	draw_litter_leaf(canvas, Vector2(89.5, 94.5), 0.5, apply_tint(Color("#766145"), Vector2(89.5, 94.5), tint_at))
+	draw_litter_leaf(canvas, Vector2(89.5, 94.5), 0.5, apply_tint(litter_b, Vector2(89.5, 94.5), tint_at))
 	var twig := Vector2(227.5, 126.0)
 	canvas.draw_polyline(PackedVector2Array([twig + Vector2(-3, -2.5), twig, twig + Vector2(3, 0.5)]), apply_tint(Color("#675746"), twig, tint_at), 0.5)
 	canvas.draw_line(twig + Vector2(-3, -2.5), twig, apply_tint(Color("#3d4f46"), twig, tint_at), 0.5)
@@ -467,27 +495,37 @@ func draw_litter_leaf(canvas: Node2D, at: Vector2, turn: float, ink: Color) -> v
 func snap(point: Vector2) -> Vector2:
 	return (point * 2.0).round() * 0.5
 
-func draw_cicada_perch(canvas: Node2D, tint_at: Callable = Callable()) -> void:
+func draw_cicada_perch(canvas: Node2D, tint_at: Callable = Callable(), season_id := &"autumn") -> void:
 	var p := CICADA_PERCH
 	var sway := (wind.flutter(23) * 0.35) if wind != null else 0.0
 	var tip := snap(p + Vector2(-7.5 + sway, -5.5))
 	var tail := snap(p + Vector2(5.5, 3.8))
 	var fork_root := snap(p + Vector2(1.5, 1.0))
 	var fork_tip := snap(p + Vector2(4.2 + sway * 0.5, -1.2))
-	# Deep shadow leaves tucking the branch into the upper-left canopy.
-	for row in [
-		[Vector2(-7.0, -4.5), Vector2(-4.5, -7.0), Vector2(-1.5, -5.2), Color("#223321")],
-		[Vector2(2.0, -2.5), Vector2(5.5, -3.5), Vector2(4.5, -0.5), Color("#334829")],
-		[Vector2(3.5, 2.5), Vector2(7.0, 1.8), Vector2(5.8, 4.8), Color("#223321")],
-	]:
-		var pts := PackedVector2Array([snap(p + row[0]), snap(p + row[1]), snap(p + row[2])])
-		canvas.draw_colored_polygon(pts, apply_tint(row[3], p, tint_at))
-	# Dark twig core, bark tone, and subtle upper rim highlight.
+	# Seasonal canopy leaf/snow accents tucking the perch twig into the upper-left tree.
+	if season_id != &"winter":
+		var leaf_dark := Color("#223321")
+		var leaf_mid := Color("#334829")
+		if season_id == &"spring":
+			leaf_dark = Color("#4a7033")
+			leaf_mid = Color("#e3a3b4")
+		elif season_id == &"autumn":
+			leaf_dark = Color("#6e361c")
+			leaf_mid = Color("#b86426")
+		for row in [
+			[Vector2(-7.0, -4.5), Vector2(-4.5, -7.0), Vector2(-1.5, -5.2), leaf_dark],
+			[Vector2(2.0, -2.5), Vector2(5.5, -3.5), Vector2(4.5, -0.5), leaf_mid],
+			[Vector2(3.5, 2.5), Vector2(7.0, 1.8), Vector2(5.8, 4.8), leaf_dark],
+		]:
+			var pts := PackedVector2Array([snap(p + row[0]), snap(p + row[1]), snap(p + row[2])])
+			canvas.draw_colored_polygon(pts, apply_tint(row[3], p, tint_at))
+	# Dark twig core, bark tone, and subtle upper rim highlight (snow-dusted in winter).
+	var rim_col := Color("#dce6f0") if season_id == &"winter" else Color("#6c5a41")
 	canvas.draw_line(tip + Vector2(0.0, 0.75), tail + Vector2(0.0, 0.75), apply_tint(Color("#222119"), p, tint_at), 1.75)
 	canvas.draw_line(tip, tail, apply_tint(Color("#4a3d2d"), p, tint_at), 1.5)
-	canvas.draw_line(tip + Vector2(0.5, -0.4), tail + Vector2(-0.5, -0.4), apply_tint(Color("#6c5a41"), p, tint_at), 0.5)
+	canvas.draw_line(tip + Vector2(0.5, -0.4), tail + Vector2(-0.5, -0.4), apply_tint(rim_col, p, tint_at), 0.5)
 	canvas.draw_line(fork_root, fork_tip, apply_tint(Color("#4a3d2d"), p, tint_at), 0.9)
-	canvas.draw_line(fork_root + Vector2(0.0, -0.35), fork_tip + Vector2(-0.2, -0.35), apply_tint(Color("#6c5a41"), p, tint_at), 0.45)
+	canvas.draw_line(fork_root + Vector2(0.0, -0.35), fork_tip + Vector2(-0.2, -0.35), apply_tint(rim_col, p, tint_at), 0.45)
 
 func draw_cicada(canvas: Node2D, pointer: Vector2, tint_at: Callable = Callable()) -> void:
 	var at := pointer - Vector2(0, 5) if cicada_held else cicada_position

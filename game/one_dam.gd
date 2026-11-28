@@ -31,6 +31,7 @@ var scene := View.new()
 var gate := Button.new()
 var rain_button := Button.new()
 var time_button := Button.new()
+var season_button := Button.new()
 var music_button := Button.new()
 var last_day_stage := 0
 var hud_actions: HBoxContainer
@@ -42,6 +43,7 @@ var title_dismissed := false
 var page_veil: ColorRect
 var restart_phase := 0
 var restart_fade := 0.0
+var season_veil := 0.0
 var controls_art := Controls.new()
 var music_director := MusicDirector.new()
 var music_enabled := true
@@ -66,6 +68,7 @@ var shutter_audio: AudioStreamPlayer
 var hearth_audio: AudioStreamPlayer
 var squirt_draw_audio: AudioStreamPlayer
 var squirt_jet_audio: AudioStreamPlayer
+var steam_audio: AudioStreamPlayer
 var last_snapshot_path := ""
 var held: Pool.Piece
 var held_floater: View.Floater
@@ -75,6 +78,7 @@ var grab := Vector2.ZERO
 var lag := 0.0
 var knock_cooldown := 0.0
 var seep_cooldown := 2.4
+var steam_cooldown := 0.0
 var gate_plug: Pool.Piece
 var gate_pool: Pool
 
@@ -187,6 +191,11 @@ func _ready() -> void:
 		squirt_jet_audio.stream = WaterAudio.squirt_jet()
 		squirt_jet_audio.volume_db = -60.0
 		add_child(squirt_jet_audio)
+		steam_audio = AudioStreamPlayer.new()
+		steam_audio.stream = WaterAudio.steam_hiss()
+		steam_audio.volume_db = -18.5
+		add_child(steam_audio)
+	scene.hearth.sizzled.connect(on_hearth_sizzled)
 	model.released.connect(on_released.bind(false))
 	lower.released.connect(on_released.bind(true))
 	model.landed.connect(scene.support_impact)
@@ -247,11 +256,13 @@ func build_controls() -> void:
 	controls_art.configure(reset, "重来", Controls.Action.RESTART, request_restart, "R")
 	controls_art.configure(rain_button, "下雨", Controls.Action.RAIN, toggle_rain)
 	controls_art.configure(time_button, "午后", Controls.Action.TIME, cycle_time, "T")
+	controls_art.configure(season_button, "春季", Controls.Action.SEASON, cycle_season, "S")
 	controls_art.configure(music_button, "音乐开", Controls.Action.MUSIC, toggle_music)
 	actions.add_child(gate)
 	actions.add_child(reset)
 	actions.add_child(rain_button)
 	actions.add_child(time_button)
+	actions.add_child(season_button)
 	actions.add_child(music_button)
 	var group_size := actions.get_combined_minimum_size()
 	var margin := Vector2(24, 22)
@@ -324,6 +335,27 @@ func cycle_time() -> void:
 	last_day_stage = next_stage
 	controls_art.set_time_stage(time_button, next_stage)
 
+func set_season(next_season: int) -> void:
+	dismiss_title()
+	hud_idle = 0.0
+	var target := clampi(next_season, 0, 3) as View.SeasonProfile.Season
+	scene.set_season(target)
+	controls_art.set_season(season_button, int(target))
+	update_rain_button_label()
+	season_veil = 1.0
+	play_foley(bamboo_audio, 0.94, 1.06)
+
+func cycle_season() -> void:
+	set_season((int(scene.world.season) + 1) % 4)
+
+func update_rain_button_label() -> void:
+	var winter := scene.world.season == View.SeasonProfile.Season.WINTER
+	if winter:
+		rain_button.text = "停雪" if scene.rain.enabled else "下雪"
+	else:
+		rain_button.text = "停雨" if scene.rain.enabled else "下雨"
+	controls_art.set_rain_active(rain_button, scene.rain.enabled, winter)
+
 func toggle_music() -> void:
 	dismiss_title()
 	hud_idle = 0.0
@@ -355,8 +387,9 @@ func restart() -> void:
 	model.reset()
 	lower.reset()
 	scene.clear()
-	rain_button.text = "下雨"
-	controls_art.set_rain_active(rain_button, false)
+	season_veil = 0.0
+	controls_art.set_season(season_button, int(scene.world.season))
+	update_rain_button_label()
 	last_day_stage = 0
 	controls_art.set_time_stage(time_button, 0)
 	if rain_audio != null:
@@ -389,12 +422,15 @@ func restart() -> void:
 		squirt_draw_audio.stop()
 	if squirt_jet_audio != null:
 		squirt_jet_audio.stop()
+	if steam_audio != null:
+		steam_audio.stop()
 	upper_breach.reset()
 	lower_breach.reset()
 	cancel_grab()
 	lag = 0.0
 	knock_cooldown = 0.0
 	seep_cooldown = 2.4
+	steam_cooldown = 0.0
 	gate_plug = null
 	gate_pool = null
 	clack.stop()
@@ -417,14 +453,14 @@ func toggle_rain() -> void:
 	dismiss_title()
 	hud_idle = 0.0
 	scene.rain.enabled = not scene.rain.enabled
-	rain_button.text = "停雨" if scene.rain.enabled else "下雨"
-	controls_art.set_rain_active(rain_button, scene.rain.enabled)
+	update_rain_button_label()
 	if scene.rain.enabled and rain_audio != null and not rain_audio.playing:
 		rain_audio.volume_db = -60.0
 		rain_audio.play()
 
 func _process(delta: float) -> void:
 	knock_cooldown = maxf(0.0, knock_cooldown - delta)
+	steam_cooldown = maxf(0.0, steam_cooldown - delta)
 	lag += minf(delta, 0.1)
 	while lag >= STEP:
 		scene.rain.advance(STEP)
@@ -455,9 +491,22 @@ func _process(delta: float) -> void:
 		if restart_fade <= 0.0:
 			restart_phase = 0
 	if page_veil != null:
-		page_veil.color.a = restart_fade * 0.88
+		season_veil = move_toward(season_veil, 0.0, delta * 2.8)
+		var sv_alpha := sin(season_veil * PI) * 0.28
+		if restart_fade > 0.005:
+			page_veil.color = Color(0.94, 0.89, 0.80, restart_fade * 0.88)
+		else:
+			var tint := Color(0.94, 0.90, 0.82)
+			match scene.world.season:
+				View.SeasonProfile.Season.SPRING:
+					tint = Color(0.98, 0.90, 0.92)
+				View.SeasonProfile.Season.SUMMER:
+					tint = Color(0.92, 0.96, 0.86)
+				View.SeasonProfile.Season.WINTER:
+					tint = Color(0.88, 0.93, 0.99)
+			page_veil.color = Color(tint.r, tint.g, tint.b, sv_alpha)
 	var screen_mouse := get_global_mouse_position()
-	if (screen_mouse.x > 540.0 and screen_mouse.y > 650.0) or get_viewport().gui_get_hovered_control() != null:
+	if (screen_mouse.x > 420.0 and screen_mouse.y > 650.0) or get_viewport().gui_get_hovered_control() != null:
 		hud_idle = 0.0
 	else:
 		hud_idle += delta
@@ -618,6 +667,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			opening()
 		elif event.physical_keycode == KEY_T:
 			cycle_time()
+		elif event.physical_keycode == KEY_S:
+			cycle_season()
 		elif event.physical_keycode == KEY_P:
 			take_snapshot()
 		elif event.physical_keycode == KEY_H:
@@ -697,7 +748,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			held = null
 		if held != null:
 			grab = point
+			var on_dry_bank := scene.bank.has(held) and scene.on_bank(scene.piece_screen(held))
 			from_bank = scene.bank.has(held) or scene.riffle.has(held)
+			if on_dry_bank:
+				scene.ground_traces.add_hollow(scene.piece_screen(held), held.radius)
 			scene.held = held
 			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 			update_grab(point)
@@ -732,14 +786,24 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if scene.boat.held:
 		if Rect2(Vector2(4.0, 4.0), View.SIZE - Vector2(8.0, 8.0)).has_point(point):
-			var local := scene.from_screen(point)
-			var wet := scene.is_wet(local) and not scene.on_bank(point)
-			scene.boat.place(point, scene.from_screen, wet)
-			if wet:
-				scene.burst(local, 0.22)
-				play_foley(forage_audio, 0.90, 1.02)
+			if scene.hearth.contains(point) and scene.hearth.burning:
+				if scene.boat.soaked < 0.45:
+					scene.hearth.flare_tinder(0.32, 8)
+					scene.boat.burn_away()
+					play_foley(ignite_audio, 1.05, 1.18)
+				else:
+					scene.hearth.douse(0.20, true)
+					scene.boat.dry_near_fire(0.55)
+					scene.boat.place(View.Hearth.CENTER + Vector2(-16.0, 6.0), scene.from_screen, false)
 			else:
-				play_foley(forage_audio, 1.02, 1.14)
+				var local := scene.from_screen(point)
+				var wet := scene.is_wet(local) and not scene.on_bank(point)
+				scene.boat.place(point, scene.from_screen, wet)
+				if wet:
+					scene.burst(local, 0.22)
+					play_foley(forage_audio, 0.90, 1.02)
+				else:
+					play_foley(forage_audio, 1.02, 1.14)
 		cancel_grab()
 		return
 	if held_floater != null:
@@ -777,14 +841,27 @@ func _unhandled_input(event: InputEvent) -> void:
 				clack.pitch_scale = 0.92
 				clack.play()
 		elif can_return_to_bank(point):
+			var was_wet := not from_bank or scene.riffle.has(held) or scene.is_wet(held.point)
+			var land_point := point
+			if scene.hearth.contains(point) and (scene.hearth.burning or scene.hearth.heat > 0.04):
+				if held.kind == Pool.EARTH:
+					scene.hearth.smother(0.95)
+					land_point = View.Hearth.CENTER + Vector2(-17.0, 4.0)
+				elif was_wet:
+					scene.hearth.douse(0.48, true)
+					land_point = View.Hearth.CENTER + Vector2(-16.0, 5.0)
 			pool_for(held.point.x).detach(held)
 			scene.riffle.erase(held)
-			held.point = scene.from_screen(point)
+			held.point = scene.from_screen(land_point)
 			held.visible_lift = 0.0
 			held.notch = 0.0
 			held.bounce = 0.72 if held.kind == Pool.EARTH else 0.38
 			if not scene.bank.has(held):
 				scene.bank.append(held)
+			if was_wet:
+				scene.ground_traces.add_wet_ring(land_point, held.radius)
+			else:
+				scene.stimuli.emit_event(View.WorldStimulus.Kind.NOISE, land_point, held.point, Vector2.ZERO, 52.0, 0.5, false, &"stone_drop")
 			if held.kind == Pool.EARTH:
 				play_foley(mud_audio, 0.95, 1.08)
 			elif can_play_audio():
@@ -1053,6 +1130,14 @@ func on_stone_splash(mass: float, strength: float) -> void:
 		stone_splash.pitch_scale = lerpf(1.24, 0.78, mass)
 		stone_splash.volume_db = lerpf(-31.0, -23.0, clampf(strength, 0.0, 1.0))
 		stone_splash.play()
+
+func on_hearth_sizzled(strength: float) -> void:
+	if steam_audio == null or not can_play_audio() or steam_cooldown > 0.0:
+		return
+	steam_audio.pitch_scale = randf_range(0.90, 1.14)
+	steam_audio.volume_db = lerpf(-24.0, -16.5, clampf(strength, 0.0, 1.0))
+	steam_audio.play()
+	steam_cooldown = 0.24
 
 func play_knock(pitch: float) -> void:
 	if knock_cooldown > 0.0 or not can_play_audio():

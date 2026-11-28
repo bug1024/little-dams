@@ -70,7 +70,7 @@ func apply(target: Season) -> void:
 			lily_pad_lit = Color("#93b859")
 			# Early autumn keeps late-summer insects alive so all creek life remains playable.
 			species_weights = {
-				&"cicada": 0.85, &"dragonfly": 0.95, &"frog": 0.95, &"crab": 1.0,
+				&"cicada": 0.85, &"dragonfly": 0.95, &"frog": 1.0, &"crab": 1.0,
 				&"bird": 1.0, &"mole": 1.0, &"mantis": 1.0, &"firefly": 0.90, &"loach": 1.0,
 			}
 			music_tags.assign([&"autumn", &"shared"])

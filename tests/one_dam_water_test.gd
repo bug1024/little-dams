@@ -45,6 +45,9 @@ func run() -> void:
 	check_boat_and_polish()
 	check_squirt_gun()
 	check_world_architecture()
+	check_ground_traces()
+	check_object_physics()
+	check_seasons_and_signpost()
 	check_music_cycle()
 	game.free()
 	quit(failures)
@@ -588,6 +591,7 @@ func check_insect_drag() -> void:
 
 func check_cicada() -> void:
 	game.restart()
+	game.set_season(View.SeasonProfile.Season.SUMMER)
 	var view := game.scene
 	var summer := view.summer
 	var start := summer.cicada_position
@@ -605,6 +609,7 @@ func check_cicada() -> void:
 	frames(120)
 	expect(not summer.cicada_held and summer.cicada_position == landing, "The cicada stays where the player sets it down")
 	game.restart()
+	game.set_season(View.SeasonProfile.Season.SUMMER)
 	expect(summer.cicada_position == start, "Restart returns the cicada to its shaded twig")
 
 	# Intermittent chirping bursts separated by natural quiet pauses.
@@ -638,6 +643,7 @@ func check_cicada() -> void:
 
 	# Grabbing a singing cicada triggers a startled buzz and stops the song.
 	game.restart()
+	game.set_season(View.SeasonProfile.Season.SUMMER)
 	for i in 300:
 		frames(1)
 		if summer.cicada_singing:
@@ -839,6 +845,7 @@ func check_bird() -> void:
 
 func check_time_of_day() -> void:
 	game.restart()
+	game.set_season(View.SeasonProfile.Season.SUMMER)
 	var view := game.scene
 	expect(view.day_phase == 0.0 and game.time_button.text == "午后", "Scene starts in bright afternoon")
 	game.cycle_time()
@@ -1165,18 +1172,19 @@ func check_world_architecture() -> void:
 	game.restart()
 	var view := game.scene
 	var world := view.world
-	expect(world.season == view.SeasonProfile.Season.AUTUMN and world.profile.lily_pads_visible,
-		"WorldState boots into the active autumn SeasonProfile with natural creek lily pads")
+	expect(world.season == view.SeasonProfile.Season.SPRING and world.profile.lily_pads_visible,
+		"WorldState boots into the default Spring SeasonProfile with natural creek lily pads")
 
-	# Seasonal ecology matrix: twilight fireflies glow in autumn, while winter silences insects/frogs and hides lily pads.
+	# Seasonal ecology matrix: summer twilight fireflies glow brightly, while winter silences insects/frogs and hides lily pads.
+	world.set_season(view.SeasonProfile.Season.SUMMER)
 	world.sync(2.0, 0.0, 0.0, 0.0, 0.2, 0.5, 0.0)
-	var autumn_twi_firefly := world.species_activity(&"firefly")
-	var autumn_twi_cicada := world.species_activity(&"cicada")
+	var summer_twi_firefly := world.species_activity(&"firefly")
+	var summer_twi_cicada := world.species_activity(&"cicada")
 	world.set_season(view.SeasonProfile.Season.WINTER)
 	var winter_firefly := world.species_activity(&"firefly")
 	var winter_frog := world.species_activity(&"frog")
 	var winter_bird := world.species_activity(&"bird")
-	expect(autumn_twi_firefly > 0.80 and autumn_twi_cicada < 0.05 and winter_firefly == 0.0 and winter_frog == 0.0 and not world.profile.lily_pads_visible,
+	expect(summer_twi_firefly > 0.80 and summer_twi_cicada < 0.05 and winter_firefly == 0.0 and winter_frog == 0.0 and not world.profile.lily_pads_visible,
 		"SeasonProfile and WorldState drive seasonal and diurnal species activity cleanly")
 	world.sync(0.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0)
 	expect(world.species_activity(&"bird") > 0.50 and winter_bird < 0.05,
@@ -1210,6 +1218,229 @@ func check_world_architecture() -> void:
 	frames(45)
 	expect(hidden_ok and not game.wallpaper_mode and game.hud_actions.visible,
 		"Wallpaper mode cleanly hides and restores all HUD controls")
+	game.restart()
+
+func check_ground_traces() -> void:
+	game.restart()
+	frames(30)
+	var GroundTraces = preload("res://game/world/ground_traces.gd")
+	var traces := game.scene.ground_traces
+	expect(traces.traces.is_empty(), "Ground traces start clean after restart")
+
+	# Unified two-plane stone & clay textures generate cleanly with valid non-empty rims.
+	var stone_art := game.scene.rock_art.for_piece(12.0, 0)
+	var clay_art := game.scene.rock_art.for_earth(8.0, 1)
+	expect(stone_art.texture != null and stone_art.texture.get_width() >= 24 and stone_art.rim.size() == stone_art.texture.get_height(),
+		"Unified two-plane stone sprite generates cleanly with accurate waterline rim")
+	expect(clay_art.texture != null and clay_art.texture.get_width() >= 16 and clay_art.rim.size() == clay_art.texture.get_height(),
+		"Unified rustic clay sprite generates cleanly with accurate waterline rim")
+
+	# 1. Lifting a resting stone from dry bank leaves a damp HOLLOW trace behind.
+	var bank_stone: Materials.Piece = null
+	for p in game.scene.bank:
+		if p.kind == Materials.STONE and game.scene.on_bank(game.scene.piece_screen(p)):
+			bank_stone = p
+			break
+	expect(bank_stone != null, "Found dry bank stone for ground trace test")
+	if bank_stone != null:
+		drag_piece(bank_stone, Vector2(150.0, 0.0))
+		frames(10)
+		expect(traces.count_kind(GroundTraces.Kind.HOLLOW) == 1 and game.model.wall.has(bank_stone),
+			"Lifting a resting bank stone into the creek leaves a persistent damp hollow on the bank")
+
+		# 2. Moving that wet river stone back onto the dry bank leaves a WET_RING seepage mark.
+		var dry_spot := game.scene.from_screen(Vector2(140.0, 166.0))
+		drag_piece(bank_stone, dry_spot)
+		frames(10)
+		expect(traces.count_kind(GroundTraces.Kind.WET_RING) == 1 and game.scene.bank.has(bank_stone),
+			"Setting a wet creek stone back onto the dry bank leaves a dark wet seepage ring")
+
+	# 3. Spraying dry bank dirt with the bamboo water gun creates DAMP_SPOT via WorldStimulus.
+	var dry_dirt := Vector2(125.0, 165.0)
+	game.scene.on_squirt_impact(dry_dirt, Vector2(40.0, 10.0), 0.9, false)
+	expect(traces.count_kind(GroundTraces.Kind.DAMP_SPOT) == 1,
+		"Bamboo water gun spraying dry bank dirt leaves a persistent damp soil patch")
+
+	# 4. Plucking a rooted wildflower leaves a tiny disturbed soil PLUCK_MARK.
+	var rooted_flower: View.Floater = null
+	for item in game.scene.floaters:
+		if item.rooted and item.forage == View.Forage.FLOWER:
+			rooted_flower = item
+			break
+	if rooted_flower != null:
+		game.scene.place_floater(rooted_flower, Vector2(155.0, 100.0))
+		expect(traces.count_kind(GroundTraces.Kind.PLUCK_MARK) == 1 and not rooted_flower.rooted,
+			"Plucking a rooted wildflower leaves a subtle disturbed earth mark")
+
+	# 5. Drying physics: traces fade slower in rain than in afternoon sun, and eventually clear.
+	var wet_count_before := traces.traces.size()
+	game.scene.world.rain_intensity = 0.85
+	game.scene.world.rain_wetness = 0.80
+	traces.advance(45.0, game.scene.world)
+	var still_present_in_rain := traces.traces.size() == wet_count_before
+	game.scene.world.rain_intensity = 0.0
+	game.scene.world.rain_wetness = 0.0
+	traces.advance(120.0, game.scene.world)
+	expect(still_present_in_rain and traces.traces.is_empty(),
+		"Rain preserves damp ground traces while prolonged sunshine dries them naturally")
+	game.restart()
+	expect(traces.traces.is_empty(), "Restart clears all ground traces cleanly")
+
+func check_object_physics() -> void:
+	game.restart()
+	var view := game.scene
+	var hearth := view.hearth
+
+	# 1. Water gun jet hits burning fire -> emits white steam puffs and completely extinguishes it!
+	hearth.wood = 2.0
+	hearth.grass = 1.0
+	hearth.ignite()
+	frames(30)
+	for i in 10:
+		view.on_squirt_impact(Hearth.CENTER, Vector2(30.0, 0.0), 1.0, false)
+	var has_steam := hearth.puffs.any(func(p) -> bool: return p.is_steam)
+	expect(has_steam and not hearth.burning and hearth.ash > 0.50,
+		"Water gun stream raises white steam and completely extinguishes the campfire")
+
+	# 2. Mud clod dropped onto a burning campfire smothers and puts out the fire!
+	game.restart()
+	hearth = view.hearth
+	hearth.wood = 2.0
+	hearth.grass = 1.0
+	hearth.ignite()
+	frames(30)
+	var mud_clod: Materials.Piece = null
+	for p in view.bank:
+		if p.kind == Materials.EARTH:
+			mud_clod = p
+			break
+	if mud_clod != null:
+		drag_piece(mud_clod, view.from_screen(Hearth.CENTER))
+	expect(not hearth.burning and hearth.ash > 0.55 and hearth.dampness > 0.45,
+		"Dropping a mud clod onto a burning campfire smothers and extinguishes it")
+
+	# 3. Wet creek stone dropped onto a burning campfire steams and shrinks the flames!
+	game.restart()
+	hearth = view.hearth
+	hearth.wood = 2.5
+	hearth.grass = 1.0
+	hearth.ignite()
+	frames(40)
+	var wet_stone := put(game.model, Vector2(150.0, 0.0), 10.0, Materials.STONE)
+	var heat_before_stone := hearth.heat
+	drag_piece(wet_stone, view.from_screen(Hearth.CENTER))
+	expect(hearth.heat < heat_before_stone - 0.25 and hearth.puffs.any(func(p) -> bool: return p.is_steam),
+		"Dropping a wet creek stone onto a burning fire raises steam and cools the flame")
+
+	# 4. Water gun soaks dry firewood so wet kindling cannot fuel an unlit fire!
+	game.restart()
+	hearth = view.hearth
+	var dry_branch: View.Floater = view.floaters.filter(func(f: View.Floater) -> bool: return f.forage == View.Forage.THIN_BRANCH)[0]
+	var branch_pt := view.forage_screen(dry_branch)
+	for i in 4:
+		view.on_squirt_impact(branch_pt, Vector2(20.0, 0.0), 1.0, false)
+	expect(dry_branch.soaked >= 0.35 and not view.can_fuel_hearth(dry_branch),
+		"Spraying dry firewood with the water gun soaks it so it cannot light a cold fire")
+
+	# 5. Dry paper boat burns into a golden flare in a lit hearth (and respawns later),
+	#    while a soaked paper boat steams and dries itself safely without burning!
+	hearth.wood = 2.0
+	hearth.grass = 1.0
+	hearth.ignite()
+	frames(30)
+	var boat := view.boat
+	boat.soaked = 0.80
+	var boat_pt := boat.screen_pos(view.to_screen, Vector2.ZERO)
+	pointer_button(boat_pt, true)
+	pointer_button(Hearth.CENTER, false)
+	var wet_survived := boat.burned_timer == 0.0 and boat.soaked < 0.40
+	hearth.wood = 2.0
+	hearth.heat = 0.45
+	hearth.burning = true
+	boat.soaked = 0.0
+	var heat_pre_paper := hearth.heat
+	pointer_button(boat.screen_pos(view.to_screen, Vector2.ZERO), true)
+	pointer_button(Hearth.CENTER, false)
+	var dry_burned := boat.burned_timer > 0.0 and hearth.heat > heat_pre_paper + 0.15
+	frames(300)
+	expect(wet_survived and dry_burned and boat.burned_timer == 0.0,
+		"Soaked paper boat steams dry near fire while dry paper boat flares in flames and later respawns")
+
+	# 6. Dry autumn leaf tossed into a burning fire flares sparks & boosts heat!
+	var dry_leaf: View.Floater = view.floaters.filter(func(f: View.Floater) -> bool:
+		return f.forage == View.Forage.NONE and not f.twig and not f.afloat)[0]
+	hearth.burning = true
+	hearth.heat = 0.35
+	var heat_pre_leaf := hearth.heat
+	view.place_floater(dry_leaf, Hearth.CENTER)
+	expect(not view.floaters.has(dry_leaf) and hearth.heat > heat_pre_leaf + 0.10,
+		"Tossing a dry autumn leaf into a burning campfire flares the flame")
+
+	# 7. Dropping a heavy stone into the creek near a floating paper boat pushes it via splash wave!
+	game.restart()
+	view.boat.place(view.to_screen(Vector2(162.0, 0.0)), view.from_screen, true)
+	view.boat.drift = Vector2.ZERO
+	view.material_touch(Vector2(148.0, 0.0), false)
+	expect(view.boat.drift.x > 6.0,
+		"Dropping a stone into the creek sends a splash wave that pushes a nearby floating paper boat (%.1f)" % view.boat.drift.x)
+
+	# 8. Radiant campfire heat dries nearby wet ground traces faster than cold dirt, and steam_hiss audio is valid!
+	view.ground_traces.clear()
+	view.ground_traces.add_damp_spot(Hearth.CENTER + Vector2(-20.0, 2.0), 4.0)
+	view.ground_traces.add_damp_spot(Vector2(80.0, 35.0), 4.0)
+	view.ground_traces.advance(14.0, view.world, Hearth.CENTER, 0.90)
+	var near_trace_age := view.ground_traces.traces[0].age if view.ground_traces.traces.size() >= 2 else 999.0
+	var far_trace_age := view.ground_traces.traces[-1].age if not view.ground_traces.traces.is_empty() else 0.0
+	var hiss := game.WaterAudio.steam_hiss()
+	var peak := 0
+	for i in hiss.data.size() / 2:
+		peak = maxi(peak, absi(hiss.data.decode_s16(i * 2)))
+	expect(near_trace_age > far_trace_age + 12.0 and peak > 1000 and peak <= 32767,
+		"Campfire radiant heat accelerates drying of nearby wet earth and steam hiss audio synthesizes cleanly")
+	game.restart()
+
+func check_seasons_and_signpost() -> void:
+	game.restart()
+	var view := game.scene
+	expect(view.world.season == view.SeasonProfile.Season.SPRING
+		and game.season_button.text == "春季"
+		and view.terrain_sprite.texture == view.Scenery.GROUND_SPRING
+		and game.rain_button.text == "下雨",
+		"Game defaults into Spring with the wooden season plaque button in the bottom-right bar")
+
+	# Clicking the wooden season plaque cycles SPRING -> SUMMER -> AUTUMN -> WINTER -> SPRING!
+	game.season_button.pressed.emit()
+	var summer_ok := (view.world.season == view.SeasonProfile.Season.SUMMER
+		and game.season_button.text == "夏季"
+		and view.terrain_sprite.texture == view.Scenery.GROUND_SUMMER
+		and view.world.species_activity(&"cicada") > 0.85)
+	expect(summer_ok, "First click on season plaque switches cleanly into Summer lush foliage & active cicada season")
+
+	game.season_button.pressed.emit()
+	var autumn_ok := (view.world.season == view.SeasonProfile.Season.AUTUMN
+		and game.season_button.text == "秋季"
+		and view.terrain_sprite.texture == view.Scenery.GROUND)
+	expect(autumn_ok, "Second click on season plaque switches cleanly into Autumn maple plate")
+
+	game.season_button.pressed.emit()
+	var winter_ok := (view.world.season == view.SeasonProfile.Season.WINTER
+		and game.season_button.text == "冬季"
+		and view.terrain_sprite.texture == view.Scenery.GROUND_WINTER
+		and view.scenery.ledge.sprite.texture == view.Scenery.LEDGE_WINTER
+		and game.rain_button.text == "下雪")
+	expect(winter_ok, "Third click on season plaque switches into Winter terrain, snow ledge, and snow weather button")
+
+	frames(30)
+	expect(view.world.species_activity(&"cicada") == 0.0 and view.world.species_activity(&"frog") == 0.0
+		and not view.world.profile.lily_pads_visible,
+		"Winter quiets warm-season insects/frogs and hides lily pads")
+
+	game.season_button.pressed.emit()
+	expect(view.world.season == view.SeasonProfile.Season.SPRING
+		and game.season_button.text == "春季"
+		and view.terrain_sprite.texture == view.Scenery.GROUND_SPRING
+		and game.rain_button.text == "下雨",
+		"Fourth click cycles smoothly back to Spring default plate")
 	game.restart()
 
 func check_music_cycle() -> void:

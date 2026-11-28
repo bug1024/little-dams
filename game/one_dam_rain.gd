@@ -127,9 +127,14 @@ func draw_puddles(canvas: Node2D) -> void:
 		var edge := Vector2(spot.z * amount * 0.38, spot.z * amount * 0.09)
 		canvas.draw_line(snap(center - edge), snap(center + edge), Color(0.64, 0.71, 0.67, amount * 0.30), 0.5)
 
-func draw_drops(canvas: Node2D) -> void:
+func draw_drops(canvas: Node2D, snow_mode := false) -> void:
 	for drop in drops:
 		if drop.age < 0.0:
+			if snow_mode:
+				var flake := drop.at + Vector2(drop.slant * 1.4 + sin(drop.age * 16.0 + drop.at.x) * 1.4, 28.0) * drop.age
+				var sz := Vector2(1.0, 1.0) if drop.heavy else Vector2(0.75, 0.75)
+				canvas.draw_rect(Rect2(snap(flake), sz), Color(0.94, 0.97, 1.0, maxf(0.45, intensity * 0.88)))
+				continue
 			if drop.heavy:
 				var bead := drop.at + Vector2(drop.slant, 48.0) * drop.age
 				var alpha := maxf(0.45, intensity * 0.72)

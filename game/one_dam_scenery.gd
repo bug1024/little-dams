@@ -1,14 +1,43 @@
 extends RefCounted
 
 const Wind = preload("res://game/one_dam_wind.gd")
+const SeasonProfile = preload("res://game/world/season_profile.gd")
 const ART_SIZE := Vector2(640, 400)
 const ART_SCALE := 2.0
 const GROUND := preload("res://game/scenery/terrain.png")
-# Autumn 2B paints all bank reeds, ferns, pine boughs, and maple canopies cohesively on the
+const GROUND_SPRING := preload("res://game/scenery/terrain_spring.png")
+const GROUND_SUMMER := preload("res://game/scenery/terrain_summer.png")
+const GROUND_WINTER := preload("res://game/scenery/terrain_winter.png")
+# Each season paints all bank reeds, ferns, pine boughs, canopies, and snow cohesively on the
 # base terrain plate and sways them cleanly in one_dam_ground.gdshader (zero mismatched cutouts).
 const PLANTS := []
 const LEDGE := preload("res://game/scenery/foreground_ledge.png")
+const LEDGE_SPRING := preload("res://game/scenery/foreground_ledge_spring.png")
+const LEDGE_SUMMER := preload("res://game/scenery/foreground_ledge_summer.png")
+const LEDGE_WINTER := preload("res://game/scenery/foreground_ledge_winter.png")
 const LEDGE_ORIGIN := Vector2(505, 269)
+
+static func ground_for_season(season: SeasonProfile.Season) -> Texture2D:
+	match season:
+		SeasonProfile.Season.SPRING:
+			return GROUND_SPRING
+		SeasonProfile.Season.SUMMER:
+			return GROUND_SUMMER
+		SeasonProfile.Season.WINTER:
+			return GROUND_WINTER
+		_:
+			return GROUND
+
+static func ledge_for_season(season: SeasonProfile.Season) -> Texture2D:
+	match season:
+		SeasonProfile.Season.SPRING:
+			return LEDGE_SPRING
+		SeasonProfile.Season.SUMMER:
+			return LEDGE_SUMMER
+		SeasonProfile.Season.WINTER:
+			return LEDGE_WINTER
+		_:
+			return LEDGE
 
 class Prop:
 	var sprite: Sprite2D
@@ -60,6 +89,16 @@ func make_prop(label: StringName, texture: Texture2D, origin: Vector2, anchor: f
 	prop.sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	prop.sprite.material = prop.material
 	return prop
+
+func set_season(season: SeasonProfile.Season) -> void:
+	var winter_val := 1.0 if season == SeasonProfile.Season.WINTER else 0.0
+	if ledge != null:
+		var tex := ledge_for_season(season)
+		ledge.sprite.texture = tex
+		ledge.image = tex.get_image()
+		ledge.material.set_shader_parameter("winter_amount", winter_val)
+	for plant in plants:
+		plant.material.set_shader_parameter("winter_amount", winter_val)
 
 func advance(dt: float, wind: Wind, wetness: float, rainfall: float, hearth_glow := Vector3.ZERO, day_phase := 0.0) -> void:
 	var trail := wind.trail()

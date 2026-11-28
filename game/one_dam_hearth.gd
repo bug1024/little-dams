@@ -1,6 +1,7 @@
 extends RefCounted
 
 const Wind = preload("res://game/one_dam_wind.gd")
+signal sizzled(strength: float)
 const CENTER := Vector2(234, 154)
 const RADIUS := Vector2(14, 8)
 const LOGS := [
@@ -38,6 +39,7 @@ class Puff:
 	var waver: float
 	var rise: float
 	var close_to_ground := false
+	var is_steam := false
 
 var wood := 0.0
 var grass := 0.0
@@ -103,17 +105,63 @@ func ignite() -> void:
 		heat = 0.14
 		smoke_due = 0.07
 
-func douse(amount: float) -> void:
+func douse(amount: float, emit_steam := true) -> void:
+	var was_hot := burning or heat > 0.04
 	dampness = clampf(dampness + amount, 0.0, 1.0)
 	if burning:
-		heat = maxf(0.0, heat - amount * 0.85)
-		if puffs.size() < 24 and rng.randf() < 0.45:
-			add_smoke(true)
-		if heat <= 0.025 or dampness >= 0.88:
+		heat = maxf(0.0, heat - amount * 0.95)
+		if emit_steam and puffs.size() < 28:
+			add_steam(1 if amount < 0.20 else 3)
+		if heat <= 0.03 or dampness >= 0.85:
 			ash = maxf(ash, 0.56)
 			burning = false
 			heat = 0.0
-			add_smoke(false)
+			add_steam(4)
+		if was_hot and emit_steam:
+			sizzled.emit(clampf(amount * 2.2, 0.25, 1.0))
+
+func smother(amount := 0.95) -> void:
+	# Mud / soil smothering cuts oxygen rapidly, throwing up heavy ash smoke and killing flames.
+	var was_hot := burning or heat > 0.04
+	dampness = clampf(dampness + amount * 0.65, 0.0, 1.0)
+	if was_hot:
+		heat = maxf(0.0, heat - amount * 1.15)
+		ash = maxf(ash, 0.62)
+		add_steam(3)
+		add_smoke(true)
+		add_smoke(false)
+		if heat <= 0.05:
+			burning = false
+			heat = 0.0
+		sizzled.emit(0.85)
+
+func flare_tinder(strength := 0.28, spark_burst := 6) -> void:
+	# Dry paper boat or autumn leaves tossed onto burning coals flare briefly with bright sparks!
+	if not burning:
+		return
+	heat = minf(1.0, heat + strength)
+	ash = minf(1.0, ash + 0.14)
+	for i in spark_burst:
+		var spark := Spark.new()
+		spark.at = CENTER + Vector2(rng.randf_range(-5.5, 5.5), rng.randf_range(-3.0, 0.0))
+		spark.drift = Vector2(rng.randf_range(-6.0, 6.0), -rng.randf_range(14.0, 24.0))
+		spark.life = rng.randf_range(0.55, 1.05)
+		sparks.append(spark)
+	add_smoke(false)
+
+func add_steam(count := 2) -> void:
+	for i in count:
+		if puffs.size() >= 30:
+			break
+		var puff := Puff.new()
+		puff.is_steam = true
+		puff.close_to_ground = false
+		puff.at = CENTER + Vector2(rng.randf_range(-6.0, 6.0), rng.randf_range(-3.5, 1.0))
+		puff.life = rng.randf_range(1.1, 1.9)
+		puff.rise = rng.randf_range(13.0, 19.5)
+		puff.drift = rng.randf_range(-5.5, 5.5)
+		puff.waver = rng.randf_range(0.0, TAU)
+		puffs.append(puff)
 
 func advance(dt: float, rain: float, wind: Wind) -> void:
 	clock += dt
@@ -326,14 +374,14 @@ func draw_tongue(canvas: Node2D, root: Vector2, height: float, width: float, cur
 func draw_smoke(canvas: Node2D) -> void:
 	for puff in puffs:
 		var phase := puff.age / puff.life
-		var alpha := smoothstep(0.0, 0.16, phase) * (1.0 - smoothstep(0.62, 1.0, phase))
-		var span := (2.3 + phase * 8.6) * (1.12 if puff.close_to_ground else 1.0)
+		var alpha := smoothstep(0.0, 0.16, phase) * (1.0 - smoothstep(0.55 if puff.is_steam else 0.62, 1.0, phase))
+		var span := (2.0 + phase * (7.2 if puff.is_steam else 8.6)) * (1.12 if puff.close_to_ground else 1.0)
 		var middle := snap(puff.at)
 		var stretch := Vector2(1.0, 0.48 if puff.close_to_ground else 0.82)
-		var ink := Color(0.73, 0.75, 0.71, alpha * (0.10 if puff.close_to_ground else 0.165))
+		var ink := Color(0.92, 0.96, 0.94, alpha * 0.42) if puff.is_steam else Color(0.73, 0.75, 0.71, alpha * (0.10 if puff.close_to_ground else 0.165))
 		draw_smoke_wisp(canvas, middle, stretch * span, ink, puff.waver)
 		var fringe := middle + Vector2(sin(puff.waver) * span * 0.62, -span * 0.21)
-		draw_smoke_wisp(canvas, fringe, stretch * span * 0.79, Color(ink, ink.a * 0.48), puff.waver + 2.0)
+		draw_smoke_wisp(canvas, fringe, stretch * span * 0.79, Color(ink, ink.a * 0.52), puff.waver + 2.0)
 
 func draw_smoke_wisp(canvas: Node2D, middle: Vector2, span: Vector2, ink: Color, phase: float) -> void:
 	var outline := PackedVector2Array([Vector2(-1, 0.05), Vector2(-0.78, -0.24), Vector2(-0.64, -0.52),

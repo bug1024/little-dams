@@ -6,6 +6,7 @@ render_mode unshaded;
 uniform vec4 canopy_flutter;
 uniform float rain_wetness;
 uniform float rain_intensity;
+uniform float winter_amount = 0.0;
 uniform vec3 hearth_light = vec3(0.73125, 0.77, 0.0);
 uniform bool independent_prop = false;
 uniform vec4 prop_region = vec4(0.0, 0.0, 1.0, 1.0);
@@ -30,9 +31,10 @@ float branch_sway(vec2 p) {
 
 float foliage_color(vec3 color) {
 	float green_leaf = smoothstep(0.010, 0.074, color.g - color.r * 0.85) * smoothstep(0.024, 0.124, color.g - color.b);
-	// Also sway warm honey-gold and crimson autumn maple/fern leaves.
+	// Also sway warm honey-gold/crimson autumn leaves and spring cherry blossoms.
 	float autumn_leaf = smoothstep(0.18, 0.36, color.r - color.b) * smoothstep(0.06, 0.24, color.r - color.g * 0.65) * smoothstep(0.12, 0.42, color.r);
-	return max(green_leaf, autumn_leaf * 0.85);
+	float pink_blossom = smoothstep(0.08, 0.22, color.r - color.g) * smoothstep(0.62, 0.84, color.r) * smoothstep(0.55, 0.78, color.b);
+	return max(max(green_leaf, autumn_leaf * 0.85), pink_blossom * 0.80);
 }
 
 float cast_leaf_shade(vec2 p, vec2 texel) {
@@ -117,18 +119,23 @@ void fragment() {
 	float damp = max(texture(shore_memory, edge_cell).r * 0.78, smoothstep(0.014, 0.065, texture(flow_state, edge_cell).r));
 	float wet_bank = bank * damp * (0.64 + patches * 0.36);
 	art = mix(art, art * vec3(0.58, 0.70, 0.75), wet_bank * 0.76);
-	float moss = wet_bank * smoothstep(0.36, 0.79, patches * 0.75 + grain * 0.40);
+	float moss = wet_bank * smoothstep(0.36, 0.79, patches * 0.75 + grain * 0.40) * (1.0 - winter_amount * 0.85);
 	art = mix(art, vec3(0.20, 0.25, 0.14) * (0.74 + luma * 0.74), moss * 0.57);
+	// Subtle frosty rime sheen along the winter water edge.
+	float rime = wet_bank * winter_amount * smoothstep(0.52, 0.85, patches * 0.70 + grain * 0.35);
+	art = mix(art, vec3(0.82, 0.89, 0.96), rime * 0.24);
 	// The plate contains colored water fringe past the playable mask. Tint it as damp ground.
 	float painted_water = smoothstep(0.12, 0.26, art.g - art.r) * smoothstep(0.60, 0.83, art.b / max(art.g, 0.01));
-	art = mix(art, luma * vec3(0.79, 0.85, 0.65), painted_water * smoothstep(0.04, 0.40, bank));
-	// Preserve crisp painterly autumn hues without washing out golden maples or violet-grey rocks.
+	vec3 fringe_tone = mix(vec3(0.79, 0.85, 0.65), vec3(0.78, 0.84, 0.92), winter_amount);
+	art = mix(art, luma * fringe_tone, painted_water * smoothstep(0.04, 0.40, bank));
+	// Preserve crisp painterly seasonal hues without washing out foliage or rocks.
 	vec3 land = afternoon_light(art, p, wet_bank);
 	float value = dot(land, vec3(0.26, 0.63, 0.11));
 	float dusk = dusk_weight();
 	float twi = twilight_weight();
 	float sunlit = sunlight_at(p) * smoothstep(0.26, 0.58, value) * (0.76 + patches * 0.24);
-	vec3 sun_tint = mix(vec3(0.055, 0.048, 0.036), vec3(0.115, 0.058, 0.020), dusk);
+	vec3 day_sun = mix(vec3(0.055, 0.048, 0.036), vec3(0.042, 0.054, 0.072), winter_amount);
+	vec3 sun_tint = mix(day_sun, vec3(0.115, 0.058, 0.020), dusk);
 	land += sun_tint * sunlit * (1.0 - rain_intensity * 0.82) * (1.0 - twi * 0.92);
 	float leaf_shade = cast_leaf_shade(p, texel) * smoothstep(0.30, 0.58, value);
 	land *= mix(vec3(1.0), vec3(0.88, 0.90, 0.96), leaf_shade * (0.68 + sunlit * 0.26) * (1.0 - rain_intensity * 0.66) * (1.0 - twi * 0.75));

@@ -415,8 +415,10 @@ func apply_tint(color: Color, at: Vector2, tint_at: Callable) -> Color:
 	return tint_at.call(color, at) if tint_at.is_valid() else color
 
 func draw(canvas: Node2D, pointer: Vector2, behind: bool, ledge_front: Callable, front_pass := false,
-		tint_at: Callable = Callable()) -> void:
+		tint_at: Callable = Callable(), mantis_active := true) -> void:
 	for crawler: Crawler in [mole, mantis]:
+		if crawler == mantis and not mantis_active and crawler != held:
+			continue
 		if behind_rock(crawler) != behind:
 			continue
 		var original := crawler.position

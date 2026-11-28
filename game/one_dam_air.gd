@@ -26,6 +26,7 @@ var rng := RandomNumberGenerator.new()
 var fluff: Array[Mote] = []
 var dust: Array[Mote] = []
 var fireflies: Array[Firefly] = []
+var snow_motes: Array[Mote] = []
 var leaf: Mote
 var leaf_turn := 0.0
 var leaf_rest := 0.0
@@ -35,6 +36,8 @@ var leaf_source_x := 54.0
 func _ready() -> void:
 	for i in 11:
 		fluff.append(make_mote(Vector2(rng.randf_range(0.0, SIZE.x), rng.randf_range(0.0, SIZE.y)), rng.randf_range(5.0, 24.0)))
+	for i in 28:
+		snow_motes.append(make_mote(Vector2(rng.randf_range(0.0, SIZE.x), rng.randf_range(0.0, SIZE.y)), rng.randf_range(0.0, 26.0)))
 	for i in 22:
 		dust.append(make_mote(Vector2(rng.randf_range(10.0, 190.0), rng.randf_range(10.0, 150.0)), 0.0))
 	for spot: Vector2 in [
@@ -95,8 +98,22 @@ func advance(dt: float) -> void:
 		var sway := Vector2(sin(t) * f.radius.x, sin(t * 1.63 + 0.8) * f.radius.y)
 		var gentle_wind := Wind.DIRECTION * breeze(f.anchor) * 3.0
 		f.pos = (f.anchor + sway + gentle_wind).clamp(Vector2(6.0, 8.0), SIZE - Vector2(6.0, 8.0))
+	if _season_id() == &"winter":
+		for flake in snow_motes:
+			var w := breeze(flake.ground)
+			flake.ground += Vector2(6.0 + w * 18.0 + sin(clock * 1.6 + flake.phase) * 5.5, 13.0 + (fposmod(flake.phase, 1.0)) * 7.0) * dt
+			if flake.ground.y > SIZE.y + 4.0 or flake.ground.x > SIZE.x + 6.0:
+				if rng.randf() < 0.78:
+					flake.ground = Vector2(rng.randf_range(-16.0, SIZE.x), -4.0)
+				else:
+					flake.ground = Vector2(-4.0, rng.randf_range(0.0, SIZE.y * 0.7))
 	advance_leaf(dt)
 	queue_redraw()
+
+func _season_id() -> StringName:
+	if view != null and view.world != null:
+		return view.world.profile.id
+	return &"autumn"
 
 func advance_leaf(dt: float) -> void:
 	if leaf == null:
@@ -149,14 +166,24 @@ func _draw() -> void:
 		light *= 0.5 + 0.5 * sin(clock * 3.0 + mote.phase)
 		if light > 0.05:
 			draw_rect(Rect2(snap(mote.ground), Vector2(0.5, 0.5)), Color(dust_tint, minf(0.85, light * 1.1)))
-	draw_gnats(1.0 - smoothstep(0.85, 1.65, phase))
-	for mote in fluff:
-		var lit := (1.0 - Wind.canopy_cover(mote.ground / SIZE) * 0.55) * (1.0 - twi * 0.35)
-		var at := snap(mote.ground - Vector2(0.0, mote.height))
-		var fluff_col := Color(1.0, 0.98, 0.90).lerp(Color(1.0, 0.88, 0.72), dusk * 0.55).lerp(Color(0.76, 0.85, 0.96), twi * 0.65)
-		draw_rect(Rect2(at, Vector2(0.5, 0.5)), Color(fluff_col, 0.95 * lit))
-		for side in [Vector2(0.5, 0.0), Vector2(-0.5, 0.0), Vector2(0.0, 0.5), Vector2(0.0, -0.5)]:
-			draw_rect(Rect2(at + side, Vector2(0.5, 0.5)), Color(fluff_col, 0.30 * lit))
+	var season_id := _season_id()
+	var gnat_vis := 0.0 if season_id == &"winter" else (1.0 - smoothstep(0.85, 1.65, phase))
+	draw_gnats(gnat_vis)
+	if season_id == &"winter":
+		for flake in snow_motes:
+			var at := snap(flake.ground)
+			var sn_col := Color(0.95, 0.98, 1.0).lerp(Color(0.76, 0.85, 0.96), twi * 0.55)
+			var sz := Vector2(1.0, 1.0) if fposmod(flake.phase, 1.0) > 0.65 else Vector2(0.5, 0.5)
+			draw_rect(Rect2(at, sz), Color(sn_col, 0.84))
+	else:
+		for mote in fluff:
+			var lit := (1.0 - Wind.canopy_cover(mote.ground / SIZE) * 0.55) * (1.0 - twi * 0.35)
+			var at := snap(mote.ground - Vector2(0.0, mote.height))
+			var base_fluff := Color("#f9d6df") if (season_id == &"spring" and fposmod(mote.phase, 1.0) > 0.42) else Color(1.0, 0.98, 0.90)
+			var fluff_col := base_fluff.lerp(Color(1.0, 0.88, 0.72), dusk * 0.55).lerp(Color(0.76, 0.85, 0.96), twi * 0.65)
+			draw_rect(Rect2(at, Vector2(0.5, 0.5)), Color(fluff_col, 0.95 * lit))
+			for side in [Vector2(0.5, 0.0), Vector2(-0.5, 0.0), Vector2(0.0, 0.5), Vector2(0.0, -0.5)]:
+				draw_rect(Rect2(at + side, Vector2(0.5, 0.5)), Color(fluff_col, 0.30 * lit))
 	var glow_activity := firefly_activity()
 	if glow_activity > 0.02:
 		draw_fireflies(glow_activity)
@@ -204,6 +231,14 @@ func draw_falling_leaf() -> void:
 	if view != null and view.world != null:
 		base_col = view.world.profile.pick_leaf_color(hue_pick)
 		outline_col = view.world.profile.leaf_outline
+	if _season_id() == &"spring":
+		# Delicate smaller cherry/peach blossom petal tumbling softly in spring breeze.
+		var petal := PackedVector2Array()
+		for corner in [Vector2(-2.0, 0), Vector2(-0.8, -1.1), Vector2(1.2, -0.9), Vector2(2.1, 0), Vector2(0.9, 1.1), Vector2(-0.9, 0.9)]:
+			petal.append(snap(lifted + (corner * Vector2(1.0, squash)).rotated(leaf_turn)))
+		draw_colored_polygon(petal, Color(base_col, fade))
+		draw_polyline(petal, Color(outline_col, fade * 0.55), 0.5)
+		return
 	var vein_col := base_col.lightened(0.28)
 	draw_colored_polygon(shape, Color(base_col, fade))
 	draw_polyline(shape, Color(outline_col, fade * 0.82), 0.5)
