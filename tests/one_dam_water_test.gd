@@ -48,6 +48,8 @@ func run() -> void:
 	check_ground_traces()
 	check_object_physics()
 	check_seasons_and_signpost()
+	check_season_behaviors()
+	check_abc_polish()
 	check_music_cycle()
 	game.free()
 	quit(failures)
@@ -1245,15 +1247,38 @@ func check_ground_traces() -> void:
 	if bank_stone != null:
 		drag_piece(bank_stone, Vector2(150.0, 0.0))
 		frames(10)
-		expect(traces.count_kind(GroundTraces.Kind.HOLLOW) == 1 and game.model.wall.has(bank_stone),
-			"Lifting a resting bank stone into the creek leaves a persistent damp hollow on the bank")
+		var stone_trace = traces.traces[0] if not traces.traces.is_empty() else null
+		expect(traces.count_kind(GroundTraces.Kind.HOLLOW) == 1 and game.model.wall.has(bank_stone) and stone_trace != null and not stone_trace.deep,
+			"Lifting a resting bank stone into the creek leaves a shallow, non-deep imprint on the bank")
 
 		# 2. Moving that wet river stone back onto the dry bank leaves a WET_RING seepage mark.
 		var dry_spot := game.scene.from_screen(Vector2(140.0, 166.0))
 		drag_piece(bank_stone, dry_spot)
 		frames(10)
 		expect(traces.count_kind(GroundTraces.Kind.WET_RING) == 1 and game.scene.bank.has(bank_stone),
-			"Setting a wet creek stone back onto the dry bank leaves a dark wet seepage ring")
+			"Setting a wet creek stone back onto the dry bank leaves a subtle wet seepage mark")
+
+	# 2b. Surface classification differentiates soil, grass, rock, and winter snow, and digging mud marks deep=true.
+	var s_soil := GroundTraces.classify_surface(Color("#b8844c"), false)
+	var s_grass := GroundTraces.classify_surface(Color("#699a3e"), false)
+	var s_rock := GroundTraces.classify_surface(Color("#7e7484"), false)
+	var s_snow := GroundTraces.classify_surface(Color("#dce9f7"), true)
+	var bank_mud: Materials.Piece = null
+	for p in game.scene.bank:
+		if p.kind == Materials.EARTH and game.scene.on_bank(game.scene.piece_screen(p)):
+			bank_mud = p
+			break
+	var mud_is_deep := false
+	if bank_mud != null:
+		drag_piece(bank_mud, Vector2(158.0, 8.0))
+		frames(5)
+		for tr in traces.traces:
+			if tr.kind == GroundTraces.Kind.HOLLOW and tr.deep:
+				mud_is_deep = true
+				break
+	expect(s_soil == GroundTraces.Surface.SOIL and s_grass == GroundTraces.Surface.GRASS
+		and s_rock == GroundTraces.Surface.ROCK and s_snow == GroundTraces.Surface.SNOW and mud_is_deep,
+		"Ground traces classify soil/grass/rock/snow substrates distinctly and mark active mud digging deeper than stone moves")
 
 	# 3. Spraying dry bank dirt with the bamboo water gun creates DAMP_SPOT via WorldStimulus.
 	var dry_dirt := Vector2(125.0, 165.0)
@@ -1441,6 +1466,152 @@ func check_seasons_and_signpost() -> void:
 		and view.terrain_sprite.texture == view.Scenery.GROUND_SPRING
 		and game.rain_button.text == "下雨",
 		"Fourth click cycles smoothly back to Spring default plate")
+	game.restart()
+
+func check_season_behaviors() -> void:
+	game.restart()
+	var view := game.scene
+
+	# 1. Spring vs Summer differentiation: grass scale, moisture retention, and ambient petal drift.
+	var spring_grass := view.world.profile.grass_scale
+	var spring_dry := view.world.profile.drying_rate
+	var spring_petals := view.floaters.filter(func(f: View.Floater) -> bool: return f.ambient).size()
+	game.set_season(View.SeasonProfile.Season.SUMMER)
+	var summer_grass := view.world.profile.grass_scale
+	var summer_dry := view.world.profile.drying_rate
+	expect(spring_grass < 0.75 and summer_grass > 1.15 and spring_dry < summer_dry * 0.55 and spring_petals >= 2,
+		"Spring vs Summer diverge clearly in vegetation height (%.2f vs %.2f), soil drying, and drifting petals" % [spring_grass, summer_grass])
+
+	# 2. Autumn boosts wind gusts and accumulates multiple drifting leaves.
+	game.set_season(View.SeasonProfile.Season.AUTUMN)
+	expect(view.wind.gust_scale > 1.25 and view.world.profile.ambient_leaf_cap >= 4,
+		"Autumn elevates gusty wind scale (%.2f) and multi-leaf creek drift" % view.wind.gust_scale)
+
+	# 3. Winter thin shore ice forms along calm bays, shatters into floating shards on stone splash / poke, and cracks cleanly!
+	expect(not view.winter_ice.active, "Winter shore ice stays inactive outside Winter")
+	game.set_season(View.SeasonProfile.Season.WINTER)
+	var intact_start := view.winter_ice.intact_count()
+	expect(view.winter_ice.active and intact_start >= 5,
+		"Entering Winter forms thin translucent shore ice along calm creek bays (%d)" % intact_start)
+
+	# Direct click poke shatters a shore ice shelf into floating shards that drift downstream!
+	var first_shelf := view.winter_ice.shelves[0]
+	var shelf_screen := view.to_screen(first_shelf.world_pos)
+	pointer_button(shelf_screen, true)
+	pointer_button(shelf_screen, false)
+	var shards_after_poke := view.winter_ice.shards.size()
+	var shard_start_x := view.winter_ice.shards[0].world_pos.x if shards_after_poke > 0 else 0.0
+	frames(45)
+	var shard_end_x := view.winter_ice.shards[0].world_pos.x if not view.winter_ice.shards.is_empty() else 0.0
+	expect(shards_after_poke >= 3 and view.winter_ice.intact_count() < intact_start and shard_end_x > shard_start_x + 4.0,
+		"Poking winter shore ice shatters it into floating ice shards drifting downstream")
+
+	# Dropping a stone splash near another ice shelf shatters it too!
+	var second_shelf := view.winter_ice.shelves[3]
+	var intact_pre_splash := view.winter_ice.intact_count()
+	view.material_touch(second_shelf.world_pos + Vector2(0.0, -3.0), false)
+	expect(view.winter_ice.intact_count() < intact_pre_splash,
+		"Stone splash near winter shore ice shatters the thin ice shelf via WorldStimulus")
+
+	# Campfire radiant warmth melts nearby winter shore ice smoothly, and ice_crack audio is clean!
+	var near_fire_shelf := view.winter_ice.shelves[5]
+	var pre_melt := near_fire_shelf.integrity
+	view.hearth.wood = 2.0
+	view.hearth.grass = 1.0
+	view.hearth.ignite()
+	frames(120)
+	var crack_wav := game.WaterAudio.ice_crack()
+	var peak := 0
+	for i in crack_wav.data.size() / 2:
+		peak = maxi(peak, absi(crack_wav.data.decode_s16(i * 2)))
+	expect(near_fire_shelf.integrity < pre_melt and peak > 1000 and peak <= 32767,
+		"Lit campfire melts nearby winter ice and procedural ice crack audio synthesizes cleanly")
+
+	# Winter acoustic profile tunes creek crisper and quieter than summer.
+	expect(view.world.profile.creek_pitch_bias > 1.03 and view.world.profile.creek_db_bias < -1.5,
+		"Winter tunes creek acoustics crisper and calmer than warm seasons")
+	game.restart()
+
+func check_abc_polish() -> void:
+	game.restart()
+	var view := game.scene
+
+	# 1. Winter shore ice hover highlights the target shelf cleanly.
+	game.set_season(View.SeasonProfile.Season.WINTER)
+	var ice_pt := view.to_screen(view.winter_ice.shelves[1].world_pos)
+	var ice_hovered := view.winter_ice.set_hover(ice_pt, view.to_screen)
+	expect(ice_hovered and view.winter_ice.hovered_shelf == view.winter_ice.shelves[1],
+		"Hovering winter shore ice cleanly highlights the hovered ice shelf")
+
+	# 2. Living creatures react naturally to cursor proximity (frog throat/facing, mantis alert, cicada twitch).
+	game.set_season(View.SeasonProfile.Season.SUMMER)
+	view.frog.duration = 0.0
+	view.frog.pause = 5.0
+	view.frog.throat = 0.0
+	view.frog.advance(0.05, view.frog_clear, 0.5, 0.0, view.frog.position + Vector2(-8.0, 0.0))
+	var frog_reacted := view.frog.throat > 0.20 and view.frog.facing < 0.0 and view.frog.pause <= 0.25
+	view.ground_insects.mantis_alert = 0.0
+	view.ground_insects.advance(0.05, view.to_screen, view.from_screen, view.insect_in_water, view.insect_ripple, 0.0,
+		view.ground_insects.mantis.position + Vector2(6.0, 0.0))
+	view.summer.cicada_twitch = 0.0
+	view.summer.notice_pointer(view.summer.cicada_position + Vector2(5.0, 0.0))
+	expect(frog_reacted and view.ground_insects.mantis_alert > 0.40 and view.summer.cicada_twitch > 0.40,
+		"Frog, mantis, and cicada respond naturally to nearby pointer proximity")
+
+	# 3. Planted thin branch reinforces adjacent dam pieces and pulling it leaves a STAKE_HOLE trace.
+	var dam_stone: Materials.Piece = null
+	for p in view.bank:
+		if p.kind == Materials.STONE and p.radius >= 11.0:
+			dam_stone = p
+			break
+	expect(dam_stone != null, "Found bank stone for dam bracing test")
+	if dam_stone != null:
+		view.bank.erase(dam_stone)
+		game.model.place(dam_stone, Vector2(146.0, 0.0), null)
+		var brace_before := game.model.bracing(dam_stone)
+		var branch: View.Floater = null
+		for f in view.floaters:
+			if f.forage == View.Forage.THIN_BRANCH:
+				branch = f
+				break
+		expect(branch != null, "Found thin branch for stake bracing test")
+		if branch != null:
+			view.place_floater(branch, view.to_screen(Vector2(154.0, 1.0)))
+			frames(3)
+			var brace_after := game.model.bracing(dam_stone)
+			var hole_before := view.ground_traces.count_kind(View.GroundTraces.Kind.STAKE_HOLE)
+			game.begin_floater_grab(branch, view.forage_screen(branch))
+			game.cancel_grab()
+			var hole_after := view.ground_traces.count_kind(View.GroundTraces.Kind.STAKE_HOLE)
+			expect(brace_after > brace_before + 0.35 and hole_after > hole_before,
+				"Planted branch structurally braces adjacent dam stone (%.2f -> %.2f) and pulling leaves a stake hole" % [brace_before, brace_after])
+
+	# 4. Water striders follow seasonal ecology (peak in Summer, absent in Winter) and scatter on stone SPLASH.
+	game.set_season(View.SeasonProfile.Season.SUMMER)
+	var summer_skaters := view.water_striders.active_count(view.world.profile.species_weight(&"water_strider"), 0.0)
+	var first_skater := view.water_striders.striders[0]
+	first_skater.vel = Vector2.ZERO
+	view.material_touch(first_skater.world_pos + Vector2(3.0, 0.0), false)
+	var skater_burst := first_skater.vel.length()
+	game.set_season(View.SeasonProfile.Season.WINTER)
+	var winter_skaters := view.water_striders.active_count(view.world.profile.species_weight(&"water_strider"), 0.0)
+	expect(summer_skaters >= 4 and winter_skaters == 0 and skater_burst > 18.0,
+		"Water striders thrive in Summer (%d), vanish in Winter (%d), and dart away on stone splash (%.1f)" % [summer_skaters, winter_skaters, skater_burst])
+
+	# 5. New evening cricket ambience & micro-foley buffers synthesize cleanly without clipping.
+	var audio_ok := true
+	for wav: AudioStreamWAV in [
+		game.WaterAudio.evening_crickets(),
+		game.WaterAudio.leaf_rustle(),
+		game.WaterAudio.stake_foley(),
+		game.WaterAudio.scurry_foley(),
+	]:
+		var pk := 0
+		for i in wav.data.size() / 2:
+			pk = maxi(pk, absi(wav.data.decode_s16(i * 2)))
+		if pk <= 400 or pk > 32767:
+			audio_ok = false
+	expect(audio_ok, "Evening cricket chorus, leaf rustle, stake foley, and animal scurry synthesize cleanly without clipping")
 	game.restart()
 
 func check_music_cycle() -> void:

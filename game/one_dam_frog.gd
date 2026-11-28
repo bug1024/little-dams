@@ -2,6 +2,7 @@ extends RefCounted
 
 signal landed(point: Vector2)
 signal croaked
+signal startled
 
 const AREA := Rect2(8, 8, 304, 184)
 const HOME := Vector2(168, 148)
@@ -17,6 +18,7 @@ var duration := 0.0
 var pause := 1.9
 var call_due := 3.5
 var throat := 0.0
+var alert := 0.0
 var held := false
 
 func reset() -> void:
@@ -30,6 +32,7 @@ func reset() -> void:
 	pause = 1.9
 	call_due = 3.5
 	throat = 0.0
+	alert = 0.0
 	held = false
 
 func place(at: Vector2) -> void:
@@ -42,10 +45,11 @@ func place(at: Vector2) -> void:
 func nudge_call(max_delay := 2.2) -> void:
 	call_due = minf(call_due, max_delay)
 
-func advance(dt: float, clear: Callable, activity := 0.0, twilight := 0.0) -> void:
+func advance(dt: float, clear: Callable, activity := 0.0, twilight := 0.0, pointer := Vector2.INF) -> void:
 	if held:
 		return
 	throat = move_toward(throat, 0.0, dt * 2.9)
+	alert = move_toward(alert, 0.0, dt * 1.8)
 	call_due -= dt
 	if duration > 0.0:
 		age += dt
@@ -67,6 +71,18 @@ func advance(dt: float, clear: Callable, activity := 0.0, twilight := 0.0) -> vo
 			duration = 0.0
 			landed.emit(position)
 		return
+	if pointer.is_finite():
+		var p_dist := position.distance_to(pointer)
+		if p_dist < 22.0:
+			var was_calm := alert < 0.20
+			alert = maxf(alert, clampf(1.0 - p_dist / 22.0, 0.25, 1.0))
+			if absf(pointer.x - position.x) > 1.5:
+				facing = -1.0 if pointer.x < position.x else 1.0
+			throat = maxf(throat, 0.36 * alert)
+			if p_dist < 11.5:
+				pause = minf(pause, 0.22)
+				if was_calm:
+					startled.emit()
 	if call_due <= 0.0:
 		throat = 1.0
 		croaked.emit()

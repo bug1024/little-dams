@@ -91,14 +91,23 @@ func make_prop(label: StringName, texture: Texture2D, origin: Vector2, anchor: f
 	return prop
 
 func set_season(season: SeasonProfile.Season) -> void:
-	var winter_val := 1.0 if season == SeasonProfile.Season.WINTER else 0.0
+	var sp := 1.0 if season == SeasonProfile.Season.SPRING else 0.0
+	var su := 1.0 if season == SeasonProfile.Season.SUMMER else 0.0
+	var au := 1.0 if season == SeasonProfile.Season.AUTUMN else 0.0
+	var wi := 1.0 if season == SeasonProfile.Season.WINTER else 0.0
 	if ledge != null:
 		var tex := ledge_for_season(season)
 		ledge.sprite.texture = tex
 		ledge.image = tex.get_image()
-		ledge.material.set_shader_parameter("winter_amount", winter_val)
+		ledge.material.set_shader_parameter("spring_amount", sp)
+		ledge.material.set_shader_parameter("summer_amount", su)
+		ledge.material.set_shader_parameter("autumn_amount", au)
+		ledge.material.set_shader_parameter("winter_amount", wi)
 	for plant in plants:
-		plant.material.set_shader_parameter("winter_amount", winter_val)
+		plant.material.set_shader_parameter("spring_amount", sp)
+		plant.material.set_shader_parameter("summer_amount", su)
+		plant.material.set_shader_parameter("autumn_amount", au)
+		plant.material.set_shader_parameter("winter_amount", wi)
 
 func advance(dt: float, wind: Wind, wetness: float, rainfall: float, hearth_glow := Vector3.ZERO, day_phase := 0.0) -> void:
 	var trail := wind.trail()

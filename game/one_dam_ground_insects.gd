@@ -39,6 +39,8 @@ class Crawler:
 	var stall_time := 0.0
 	var last_target := Vector2.INF
 
+signal startled
+
 var rng := RandomNumberGenerator.new()
 var mole := Crawler.new()
 var mantis := Crawler.new()
@@ -52,6 +54,7 @@ var mole_wet := false
 var close_encounter := false
 var encounter_pause := 0.0
 var mantis_alert := 0.0
+var mole_alert := 0.0
 var frog_blocker := Vector2.INF
 var crab_blocker := Vector2.INF
 var rocks: Array[Rock] = []
@@ -65,6 +68,7 @@ func reset(project: Callable) -> void:
 	close_encounter = false
 	encounter_pause = 0.0
 	mantis_alert = 0.0
+	mole_alert = 0.0
 	held = null
 	mantis_patch = MANTIS_PATCH
 	frog_blocker = Vector2.INF
@@ -297,7 +301,7 @@ func pick_mole_target(project: Callable) -> Vector2:
 			return fallback
 	return mole.position
 
-func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, ripple: Callable, day_phase := 0.0) -> void:
+func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, ripple: Callable, day_phase := 0.0, pointer := Vector2.INF) -> void:
 	if dt <= 0.0:
 		return
 	time += dt
@@ -312,6 +316,19 @@ func advance(dt: float, project: Callable, unproject: Callable, wet: Callable, r
 		close_encounter = false
 	encounter_pause = maxf(0.0, encounter_pause - dt)
 	mantis_alert = move_toward(mantis_alert, 0.0, dt * 0.78)
+	mole_alert = move_toward(mole_alert, 0.0, dt * 1.6)
+	if pointer.is_finite() and held == null:
+		var md := mole.position.distance_to(pointer)
+		if md < 16.0:
+			var first := mole_alert < 0.15
+			mole_alert = maxf(mole_alert, clampf(1.0 - md / 16.0, 0.25, 1.0))
+			if md < 9.5 and mole.rest > 0.12:
+				mole.rest = 0.08
+				if first:
+					startled.emit()
+		var td := mantis.position.distance_to(pointer)
+		if td < 18.0:
+			mantis_alert = maxf(mantis_alert, clampf(0.42 + (1.0 - td / 18.0) * 0.45, 0.42, 0.85))
 	var bed_position: Vector2 = unproject.call(mole.position)
 	mole_wet = wet.call(bed_position)
 	if held == mole or encounter_pause > 0.0:
@@ -453,7 +470,7 @@ func draw_mole(canvas: Node2D, tint_at: Callable = Callable()) -> void:
 		line(canvas, mole, Vector2(0.95, side), wrist, apply_tint(Color("#71523a"), at, tint_at), 1.25)
 		line(canvas, mole, wrist, Vector2(3.8 + reach, side * 2.05), apply_tint(Color("#a77b55"), at, tint_at), 1.45)
 		line(canvas, mole, Vector2(3.6 + reach, side * 1.85), Vector2(4.35 + reach, side * 1.7), apply_tint(Color("#ba916c"), at, tint_at))
-		var twitch := sin(time * (5.0 + side) + mole.position.y) * 0.47
+		var twitch := sin(time * (5.0 + mole_alert * 12.0 + side) + mole.position.y) * (0.47 + mole_alert * 0.42)
 		line(canvas, mole, Vector2(3.4, side * 0.55), Vector2(5.4, side * (1.13 + twitch)), apply_tint(Color("#927152"), at, tint_at))
 	body(canvas, mole, [Vector2(-4.6, 0), Vector2(-3.2, -1.65), Vector2(-0.6, -1.75), Vector2(1.4, -1.24),
 		Vector2(2.1, 0.30), Vector2(0.0, 1.76), Vector2(-3.1, 1.74)], apply_tint(Color("#523d31"), at, tint_at), lift)

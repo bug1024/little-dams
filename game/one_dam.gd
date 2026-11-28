@@ -69,6 +69,11 @@ var hearth_audio: AudioStreamPlayer
 var squirt_draw_audio: AudioStreamPlayer
 var squirt_jet_audio: AudioStreamPlayer
 var steam_audio: AudioStreamPlayer
+var ice_crack_audio: AudioStreamPlayer
+var cricket_audio: AudioStreamPlayer
+var breeze_audio: AudioStreamPlayer
+var stake_audio: AudioStreamPlayer
+var scurry_audio: AudioStreamPlayer
 var last_snapshot_path := ""
 var held: Pool.Piece
 var held_floater: View.Floater
@@ -79,6 +84,9 @@ var lag := 0.0
 var knock_cooldown := 0.0
 var seep_cooldown := 2.4
 var steam_cooldown := 0.0
+var ice_crack_cooldown := 0.0
+var breeze_cooldown := 4.0
+var scurry_cooldown := 0.0
 var gate_plug: Pool.Piece
 var gate_pool: Pool
 
@@ -195,7 +203,31 @@ func _ready() -> void:
 		steam_audio.stream = WaterAudio.steam_hiss()
 		steam_audio.volume_db = -18.5
 		add_child(steam_audio)
+		ice_crack_audio = AudioStreamPlayer.new()
+		ice_crack_audio.stream = WaterAudio.ice_crack()
+		ice_crack_audio.volume_db = -19.5
+		add_child(ice_crack_audio)
+		cricket_audio = AudioStreamPlayer.new()
+		cricket_audio.stream = WaterAudio.evening_crickets()
+		cricket_audio.volume_db = -60.0
+		add_child(cricket_audio)
+		breeze_audio = AudioStreamPlayer.new()
+		breeze_audio.stream = WaterAudio.leaf_rustle()
+		breeze_audio.volume_db = -25.0
+		add_child(breeze_audio)
+		stake_audio = AudioStreamPlayer.new()
+		stake_audio.stream = WaterAudio.stake_foley()
+		stake_audio.volume_db = -20.5
+		add_child(stake_audio)
+		scurry_audio = AudioStreamPlayer.new()
+		scurry_audio.stream = WaterAudio.scurry_foley()
+		scurry_audio.volume_db = -26.0
+		add_child(scurry_audio)
 	scene.hearth.sizzled.connect(on_hearth_sizzled)
+	scene.winter_ice.ice_cracked.connect(on_ice_cracked)
+	scene.frog.startled.connect(on_animal_startled)
+	scene.ground_insects.startled.connect(on_animal_startled)
+	scene.water_striders.startled.connect(on_animal_startled)
 	model.released.connect(on_released.bind(false))
 	lower.released.connect(on_released.bind(true))
 	model.landed.connect(scene.support_impact)
@@ -424,6 +456,16 @@ func restart() -> void:
 		squirt_jet_audio.stop()
 	if steam_audio != null:
 		steam_audio.stop()
+	if ice_crack_audio != null:
+		ice_crack_audio.stop()
+	if cricket_audio != null:
+		cricket_audio.stop()
+	if breeze_audio != null:
+		breeze_audio.stop()
+	if stake_audio != null:
+		stake_audio.stop()
+	if scurry_audio != null:
+		scurry_audio.stop()
 	upper_breach.reset()
 	lower_breach.reset()
 	cancel_grab()
@@ -431,6 +473,9 @@ func restart() -> void:
 	knock_cooldown = 0.0
 	seep_cooldown = 2.4
 	steam_cooldown = 0.0
+	ice_crack_cooldown = 0.0
+	breeze_cooldown = 4.0
+	scurry_cooldown = 0.0
 	gate_plug = null
 	gate_pool = null
 	clack.stop()
@@ -461,6 +506,9 @@ func toggle_rain() -> void:
 func _process(delta: float) -> void:
 	knock_cooldown = maxf(0.0, knock_cooldown - delta)
 	steam_cooldown = maxf(0.0, steam_cooldown - delta)
+	ice_crack_cooldown = maxf(0.0, ice_crack_cooldown - delta)
+	breeze_cooldown = maxf(0.0, breeze_cooldown - delta)
+	scurry_cooldown = maxf(0.0, scurry_cooldown - delta)
 	lag += minf(delta, 0.1)
 	while lag >= STEP:
 		scene.rain.advance(STEP)
@@ -515,7 +563,7 @@ func _process(delta: float) -> void:
 		last_day_stage = stage_now
 		controls_art.set_time_stage(time_button, stage_now)
 	if hud_actions != null:
-		var target_alpha := 0.0 if wallpaper_mode else (0.62 if hud_idle > 3.5 else 1.0)
+		var target_alpha := 0.0 if wallpaper_mode else (0.56 if hud_idle > 3.5 else 0.96)
 		var fade_rate := 7.5 if wallpaper_mode else (8.5 if target_alpha > hud_actions.modulate.a else 2.2)
 		hud_actions.modulate.a = lerpf(hud_actions.modulate.a, target_alpha, 1.0 - exp(-delta * fade_rate))
 		hud_actions.visible = not wallpaper_mode or hud_actions.modulate.a > 0.02
@@ -529,10 +577,10 @@ func _process(delta: float) -> void:
 	music_director.set_context(scene.world.profile.id, scene.world.day_tag())
 	music_director.advance(delta, scene.rain.intensity, clampf(maxf(flood_surge, breach_active), 0.0, 1.0))
 	var current := maxf(water.discharge_at(151.0), water.discharge_at(249.0))
-	var creek_level := lerpf(-6.0, -3.5, smoothstep(0.35, 2.5, current))
+	var creek_level := lerpf(-6.0, -3.5, smoothstep(0.35, 2.5, current)) + scene.world.profile.creek_db_bias
 	creek.volume_db = lerpf(creek.volume_db, creek_level, 1.0 - exp(-delta * 0.75))
 	var head := maxf(scene.pool_profile(model, 146.0).y, scene.pool_profile(lower, 262.0).y)
-	var pitch := 1.0 - smoothstep(0.10, 0.58, head) * 0.07 - scene.surge_at(187) * 0.07
+	var pitch := (1.0 - smoothstep(0.10, 0.58, head) * 0.07 - scene.surge_at(187) * 0.07) * scene.world.profile.creek_pitch_bias
 	creek.pitch_scale = lerpf(creek.pitch_scale, pitch, 1.0 - exp(-delta * 2.8))
 	if seep_audio != null:
 		update_seep_audio(delta, head)
@@ -592,6 +640,23 @@ func _process(delta: float) -> void:
 			squirt_jet_audio.pitch_scale = lerpf(0.88, 1.15, clampf(scene.squirt_gun.aim_distance / 210.0, 0.0, 1.0))
 		elif squirt_jet_audio.playing:
 			squirt_jet_audio.stop()
+	if cricket_audio != null:
+		var warm_season := scene.world.season != View.SeasonProfile.Season.WINTER
+		var cricket_lvl := smoothstep(0.55, 1.55, scene.day_phase) * (1.0 - scene.rain.intensity * 0.85) if warm_season else 0.0
+		if cricket_lvl > 0.04:
+			if not cricket_audio.playing:
+				cricket_audio.volume_db = -60.0
+				cricket_audio.play()
+			var target_db := -24.5 + linear_to_db(clampf(cricket_lvl, 0.01, 1.0))
+			cricket_audio.volume_db = lerpf(cricket_audio.volume_db, target_db, 1.0 - exp(-delta * 2.2))
+		elif cricket_audio.playing:
+			cricket_audio.stop()
+	if breeze_audio != null and breeze_cooldown <= 0.0 and scene.rain.intensity < 0.25:
+		var gust_now := scene.wind.strength_at(0.5)
+		if gust_now > 0.62 and scene.world.season != View.SeasonProfile.Season.WINTER:
+			breeze_cooldown = randf_range(5.5, 11.0)
+			breeze_audio.volume_db = lerpf(-28.0, -21.5, clampf((gust_now - 0.60) / 0.40, 0.0, 1.0))
+			play_foley(breeze_audio, 0.88, 1.12)
 
 func update_hover(pointer: Vector2) -> void:
 	scene.hovered = null
@@ -601,6 +666,7 @@ func update_hover(pointer: Vector2) -> void:
 	scene.hovered_hearth = false
 	scene.hovered_boat = false
 	scene.hovered_squirt_gun = false
+	scene.winter_ice.hovered_shelf = null
 	if held != null or held_floater != null or held_pipe != null or scene.holding_animal() or scene.boat.held or scene.squirt_gun.held:
 		return
 	if get_viewport().gui_get_hovered_control() != null:
@@ -631,6 +697,8 @@ func update_hover(pointer: Vector2) -> void:
 		scene.hovered = piece
 	elif forage != null:
 		scene.hovered_floater = forage
+	else:
+		scene.winter_ice.set_hover(pointer, scene.to_screen)
 
 func find_piece(point: Vector2) -> Pool.Piece:
 	var closest: Pool.Piece
@@ -751,13 +819,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			var on_dry_bank := scene.bank.has(held) and scene.on_bank(scene.piece_screen(held))
 			from_bank = scene.bank.has(held) or scene.riffle.has(held)
 			if on_dry_bank:
-				scene.ground_traces.add_hollow(scene.piece_screen(held), held.radius)
+				var lift_pos := scene.piece_screen(held)
+				var is_digging := held.kind == Pool.EARTH
+				scene.ground_traces.add_hollow(lift_pos, held.radius,
+					scene.world.season == View.SeasonProfile.Season.WINTER, scene.sample_surface(lift_pos), is_digging)
 			scene.held = held
 			Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 			update_grab(point)
 		else:
 			if forage != null:
 				begin_floater_grab(forage, point)
+			else:
+				scene.winter_ice.poke_at(point, scene.to_screen)
 		return
 	if scene.squirt_gun.held:
 		scene.squirt_mouse_down = false
@@ -812,7 +885,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		scene.place_floater(item, point)
 		if scene.floaters.size() < count_before:
 			play_foley(forage_audio, 0.86, 0.98)
-		elif item.host != null or item.planted:
+		elif item.planted:
+			play_foley(stake_audio, 0.92, 1.08)
+		elif item.host != null:
 			play_foley(forage_audio, 1.02, 1.16)
 		cancel_grab()
 		return
@@ -859,7 +934,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if not scene.bank.has(held):
 				scene.bank.append(held)
 			if was_wet:
-				scene.ground_traces.add_wet_ring(land_point, held.radius)
+				scene.ground_traces.add_wet_ring(land_point, held.radius, scene.sample_surface(land_point))
 			else:
 				scene.stimuli.emit_event(View.WorldStimulus.Kind.NOISE, land_point, held.point, Vector2.ZERO, 52.0, 0.5, false, &"stone_drop")
 			if held.kind == Pool.EARTH:
@@ -909,11 +984,25 @@ func stage_pointer(point: Vector2) -> Vector2:
 	return point / SCALE
 
 func begin_floater_grab(item: View.Floater, point: Vector2) -> void:
+	if item.planted:
+		var wet := scene.is_wet(item.point)
+		var hole_pt := scene.forage_screen(item)
+		scene.ground_traces.add_stake_hole(hole_pt, wet, scene.sample_surface(hole_pt))
+		if wet:
+			scene.burst(item.point, 0.16)
+		play_foley(stake_audio, 1.04, 1.18)
+	else:
+		play_foley(forage_audio, 0.92, 1.10)
 	held_floater = item
 	scene.held_floater = item
-	play_foley(forage_audio, 0.92, 1.10)
 	Input.set_default_cursor_shape(Input.CURSOR_DRAG)
 	update_grab(point)
+
+func on_animal_startled() -> void:
+	if scurry_cooldown > 0.0:
+		return
+	scurry_cooldown = 0.65
+	play_foley(scurry_audio, 0.92, 1.16)
 
 func play_foley(player: AudioStreamPlayer, min_pitch := 0.95, max_pitch := 1.05) -> void:
 	if player == null or not can_play_audio():
@@ -1138,6 +1227,14 @@ func on_hearth_sizzled(strength: float) -> void:
 	steam_audio.volume_db = lerpf(-24.0, -16.5, clampf(strength, 0.0, 1.0))
 	steam_audio.play()
 	steam_cooldown = 0.24
+
+func on_ice_cracked(strength: float) -> void:
+	if ice_crack_audio == null or not can_play_audio() or ice_crack_cooldown > 0.0:
+		return
+	ice_crack_audio.pitch_scale = randf_range(0.92, 1.16)
+	ice_crack_audio.volume_db = lerpf(-25.0, -17.5, clampf(strength, 0.0, 1.0))
+	ice_crack_audio.play()
+	ice_crack_cooldown = 0.14
 
 func play_knock(pitch: float) -> void:
 	if knock_cooldown > 0.0 or not can_play_audio():

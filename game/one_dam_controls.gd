@@ -315,32 +315,37 @@ func make_plaque(width: int, wood: Color, state: String, highlight := Color.TRAN
 	var bottom_y := h - 2 if state == "pressed" else h - 3
 	var bitmap := Image.create_empty(w, h, false, Image.FORMAT_RGBA8)
 	if state == "hover":
-		wood = wood.lightened(0.12)
+		wood = wood.lightened(0.14)
 	elif state == "disabled":
 		wood = Color("#49463d") if primary else wood.lerp(Color("#414438"), 0.72)
-	var edge := Color("#2b2b20")
-	# Pixel drop shadow beneath the wooden plaque; shrinks when pressed down.
+	var face_alpha := 0.96 if (state == "hover" or state == "pressed") else (0.76 if state == "disabled" else 0.89)
+	var wood_fill := Color(wood.r, wood.g, wood.b, face_alpha)
+	var wood_dark := Color(wood.darkened(0.30).r, wood.darkened(0.30).g, wood.darkened(0.30).b, face_alpha)
+	var edge := Color(0.18, 0.15, 0.11, 0.88 if state != "disabled" else 0.68)
+	# Soft, lighter pixel drop shadow beneath the wooden plaque so it sits gently in the scene.
 	if state == "pressed":
-		bitmap.fill_rect(Rect2i(3, h - 1, w - 6, 1), Color(0.07, 0.08, 0.06, 0.42))
+		bitmap.fill_rect(Rect2i(3, h - 1, w - 6, 1), Color(0.07, 0.08, 0.06, 0.30))
 	else:
-		bitmap.fill_rect(Rect2i(2, h - 2, w - 4, 1), Color(0.07, 0.08, 0.06, 0.50))
-		bitmap.fill_rect(Rect2i(3, h - 1, w - 6, 1), Color(0.07, 0.08, 0.06, 0.28))
+		bitmap.fill_rect(Rect2i(2, h - 2, w - 4, 1), Color(0.07, 0.08, 0.06, 0.36))
+		bitmap.fill_rect(Rect2i(3, h - 1, w - 6, 1), Color(0.07, 0.08, 0.06, 0.18))
 	for y in range(face_y, bottom_y + 1):
 		var corner := 2 if y == face_y or y == bottom_y else (1 if y == 1 + face_y or y == bottom_y - 1 else 0)
-		var color := wood if y < bottom_y - 1 else wood.darkened(0.32)
+		var color := wood_fill if y < bottom_y - 1 else wood_dark
 		bitmap.fill_rect(Rect2i(corner, y, w - 2 * corner, 1), edge)
 		if y > face_y and y < bottom_y:
 			bitmap.fill_rect(Rect2i(corner + 1, y, w - 2 * corner - 2, 1), color)
-	var top_rim := wood.lightened(0.25)
+	var top_rim := wood.lightened(0.24)
 	if highlight.a > 0.0 and state != "disabled":
-		top_rim = highlight.lightened(0.10) if state == "hover" else highlight
-	bitmap.fill_rect(Rect2i(3, face_y + 1, w - 6, 1), top_rim)
+		top_rim = highlight.lightened(0.12) if state == "hover" else highlight
+	bitmap.fill_rect(Rect2i(3, face_y + 1, w - 6, 1), Color(top_rim.r, top_rim.g, top_rim.b, 0.94))
 	for i in 8:
 		var start := 4 + (i * 19) % (w - 14)
 		var row := 3 + (i * 7) % 14 + face_y
-		bitmap.fill_rect(Rect2i(start, row, 4 + (i * 3) % 7, 1), wood.lightened(0.055) if i % 2 == 0 else wood.darkened(0.12))
+		var grain := wood.lightened(0.055) if i % 2 == 0 else wood.darkened(0.11)
+		bitmap.fill_rect(Rect2i(start, row, 4 + (i * 3) % 7, 1), Color(grain.r, grain.g, grain.b, face_alpha))
 	for x in [3, w - 4]:
-		bitmap.fill_rect(Rect2i(x, 3 + face_y, 1, 2), wood.lightened(0.32))
+		var nail := highlight.lightened(0.15) if (highlight.a > 0.0 and state != "disabled") else wood.lightened(0.30)
+		bitmap.fill_rect(Rect2i(x, 3 + face_y, 1, 2), Color(nail.r, nail.g, nail.b, 0.92))
 		bitmap.set_pixel(x, 5 + face_y, edge)
 	bitmap.resize(width, BUTTON_HEIGHT, Image.INTERPOLATE_NEAREST)
 	var plaque := StyleBoxTexture.new()

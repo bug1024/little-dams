@@ -61,8 +61,17 @@ vec3 afternoon_light(vec3 color, vec2 p, float wet) {
 		result = mix(result, mix(sunset_cool, sunset_warm, sun), dusk);
 	}
 	if (twi > 0.001) {
-		vec3 blue_hour = result * vec3(0.56, 0.67, 0.88) + vec3(0.016, 0.032, 0.070) * (1.0 - luma * 0.7);
-		result = mix(result, blue_hour, twi);
+		// Multi-layered evening twilight: subtle residual warm sky glow above receding into
+		// velvety cool twilight shadows near the ground, instead of a uniform blue multiply filter.
+		float sky_horizon = smoothstep(0.72, 0.04, p.y) * (0.45 + 0.55 * sun);
+		float canopy_dark = canopy_cover(p);
+		vec3 ground_cool = result * vec3(0.47, 0.56, 0.77) + vec3(0.012, 0.024, 0.056) * (1.0 - luma * 0.65);
+		vec3 sky_residual = result * vec3(0.72, 0.66, 0.80) + vec3(0.052, 0.028, 0.024) * (0.45 + 0.55 * luma);
+		vec3 twilight_col = mix(ground_cool, sky_residual, sky_horizon * (0.58 - canopy_dark * 0.34));
+		twilight_col *= mix(1.0, 0.84, canopy_dark * 0.65);
+		// Wet water/shore picks up a touch more calm zenith light in the dark.
+		twilight_col = mix(twilight_col, twilight_col * vec3(0.92, 1.00, 1.08) + vec3(0.010, 0.018, 0.032), wet * 0.32);
+		result = mix(result, twilight_col, twi);
 	}
 	return result;
 }

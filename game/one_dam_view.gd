@@ -19,6 +19,8 @@ const WorldState = preload("res://game/world/world_state.gd")
 const WorldStimulus = preload("res://game/world/world_stimulus.gd")
 const CreekFlora = preload("res://game/world/creek_flora.gd")
 const GroundTraces = preload("res://game/world/ground_traces.gd")
+const WinterIce = preload("res://game/world/winter_ice.gd")
+const WaterStriders = preload("res://game/world/water_striders.gd")
 const Hearth = preload("res://game/one_dam_hearth.gd")
 const Scenery = preload("res://game/one_dam_scenery.gd")
 const SIZE := Vector2(320, 200)
@@ -131,6 +133,8 @@ var world := WorldState.new()
 var stimuli := WorldStimulus.new()
 var flora := CreekFlora.new()
 var ground_traces := GroundTraces.new()
+var winter_ice := WinterIce.new()
+var water_striders := WaterStriders.new()
 var terrain_sprite: Sprite2D
 var water_sprite: Sprite2D
 var wind := Wind.new()
@@ -236,6 +240,19 @@ func on_bank(point: Vector2) -> bool:
 	var pixel := Vector2i(point / SIZE * Vector2(painted_channel.get_size()))
 	return painted_channel.get_pixelv(pixel).r < 0.5
 
+func sample_surface(screen_pos: Vector2) -> Dictionary:
+	var sz := painted_ground.get_size()
+	var base := Vector2i((screen_pos / SIZE * Vector2(sz)).round())
+	var acc := Color(0.0, 0.0, 0.0, 0.0)
+	var samples := 0
+	for off: Vector2i in [Vector2i.ZERO, Vector2i(-2, 0), Vector2i(2, 0), Vector2i(0, 2)]:
+		var px := Vector2i(clampi(base.x + off.x, 0, sz.x - 1), clampi(base.y + off.y, 0, sz.y - 1))
+		acc += painted_ground.get_pixelv(px)
+		samples += 1
+	var avg := Color(acc.r / samples, acc.g / samples, acc.b / samples, 1.0)
+	var surf := GroundTraces.classify_surface(avg, world.season == SeasonProfile.Season.WINTER)
+	return {"surface": surf, "color": avg}
+
 func rain_contact(point: Vector2) -> Rain.Contact:
 	if not on_bank(point) and is_wet(from_screen(point)):
 		return Rain.Contact.WATER
@@ -262,6 +279,8 @@ func clear() -> void:
 	hovered_squirt_gun = false
 	squirt_mouse_down = false
 	world.reset(SeasonProfile.Season.SPRING)
+	winter_ice.clear()
+	water_striders.reset()
 	apply_season_visuals(world.season)
 	flora.reset()
 	ground_traces.clear()
@@ -315,6 +334,7 @@ func clear() -> void:
 		floaters.append(item)
 	held_floater = null
 	hovered_floater = null
+	seed_season_floaters()
 	streaks.clear()
 	for i in 150:
 		streaks.append(streak_origin(i, 0.0))
@@ -519,8 +539,15 @@ func can_place_floater(item: Floater, cursor: Vector2) -> bool:
 	if hearth.contains(cursor):
 		return can_fuel_hearth(item)
 	if item.forage == Forage.THIN_BRANCH and not on_bank(cursor):
-		return not blocked_at(model, from_screen(cursor), 1.0) and not blocked_at(lower, from_screen(cursor), 1.0)
+		var local_pt := from_screen(cursor)
+		return not stake_blocked_at(model, local_pt) and not stake_blocked_at(lower, local_pt)
 	return true
+
+func stake_blocked_at(basin: Pool, point: Vector2) -> bool:
+	for piece in basin.wall:
+		if point.distance_to(piece.point) < piece.radius * 0.62:
+			return true
+	return false
 
 func place_floater(item: Floater, cursor: Vector2) -> void:
 	if not can_place_floater(item, cursor):
@@ -536,7 +563,8 @@ func place_floater(item: Floater, cursor: Vector2) -> void:
 		floaters.erase(item)
 		return
 	if item.rooted and item.forage in [Forage.FLOWER, Forage.FOXTAIL]:
-		ground_traces.add_pluck_mark(to_screen(item.shore))
+		var pluck_pos := to_screen(item.shore)
+		ground_traces.add_pluck_mark(pluck_pos, sample_surface(pluck_pos))
 	item.point = from_screen(cursor)
 	item.rooted = false
 	item.host = null
@@ -601,9 +629,37 @@ func apply_season_visuals(season: SeasonProfile.Season) -> void:
 		water_sprite.texture = PLATE if season == SeasonProfile.Season.AUTUMN else ground_tex
 	painted_ground = ground_tex.get_image()
 	scenery.set_season(season)
-	var winter_val := 1.0 if season == SeasonProfile.Season.WINTER else 0.0
-	ground_light.set_shader_parameter("winter_amount", winter_val)
-	surface.set_shader_parameter("winter_amount", winter_val)
+	var sp := 1.0 if season == SeasonProfile.Season.SPRING else 0.0
+	var su := 1.0 if season == SeasonProfile.Season.SUMMER else 0.0
+	var au := 1.0 if season == SeasonProfile.Season.AUTUMN else 0.0
+	var wi := 1.0 if season == SeasonProfile.Season.WINTER else 0.0
+	for mat: ShaderMaterial in [ground_light, surface]:
+		mat.set_shader_parameter("spring_amount", sp)
+		mat.set_shader_parameter("summer_amount", su)
+		mat.set_shader_parameter("autumn_amount", au)
+		mat.set_shader_parameter("winter_amount", wi)
+	wind.set_season_tuning(world.profile.wind_scale, world.profile.gust_interval)
+	winter_ice.set_active(season == SeasonProfile.Season.WINTER)
+	for i in range(floaters.size() - 1, -1, -1):
+		if floaters[i].ambient and floaters[i] != held_floater:
+			floaters.remove_at(i)
+	seed_season_floaters()
+
+func seed_season_floaters() -> void:
+	# Seed gentle seasonal drift (spring pink petals / autumn maple leaves) so the creek immediately feels alive.
+	var season := world.season
+	if water != null and (season == SeasonProfile.Season.SPRING or season == SeasonProfile.Season.AUTUMN):
+		var ambient_now := 0
+		for item in floaters:
+			if item.ambient:
+				ambient_now += 1
+		if ambient_now < 2:
+			for spot: Vector2 in [Vector2(54.0, -5.0), Vector2(126.0, 6.0)]:
+				if is_wet(spot):
+					var drift_item := Floater.new(spot, false, spot.x * 0.05)
+					drift_item.afloat = true
+					drift_item.ambient = true
+					floaters.append(drift_item)
 
 func current_day_stage() -> int:
 	if day_phase < 0.5:
@@ -723,7 +779,27 @@ func register_stimulus_listeners() -> void:
 	)
 	stimuli.subscribe(&"ground_traces", func(ev: WorldStimulus.Stimulus) -> void:
 		if ev.kind == WorldStimulus.Kind.WATER_JET and not ev.wet and on_bank(ev.screen_pos) and not hearth.contains(ev.screen_pos):
-			ground_traces.add_damp_spot(ev.screen_pos, 3.2 + ev.strength * 1.8)
+			ground_traces.add_damp_spot(ev.screen_pos, 3.2 + ev.strength * 1.8, sample_surface(ev.screen_pos))
+	)
+	stimuli.subscribe(&"winter_ice", func(ev: WorldStimulus.Stimulus) -> void:
+		if not winter_ice.active:
+			return
+		if ev.kind == WorldStimulus.Kind.SPLASH and ev.wet:
+			winter_ice.disturb_screen(ev.screen_pos, 30.0, 1.45 * ev.strength, to_screen)
+		elif ev.kind == WorldStimulus.Kind.WATER_JET:
+			winter_ice.disturb_screen(ev.screen_pos, 15.0, 0.65 * ev.strength, to_screen)
+		elif ev.kind == WorldStimulus.Kind.SURGE:
+			winter_ice.disturb_screen(ev.screen_pos, 42.0, 1.15 * ev.strength, to_screen)
+	)
+	stimuli.subscribe(&"water_striders", func(ev: WorldStimulus.Stimulus) -> void:
+		if world.profile.species_weight(&"water_strider") <= 0.05:
+			return
+		if ev.kind == WorldStimulus.Kind.SPLASH and ev.wet:
+			water_striders.disturb_screen(ev.screen_pos, 40.0, ev.strength, to_screen, boat_ripple)
+		elif ev.kind == WorldStimulus.Kind.WATER_JET and ev.wet:
+			water_striders.disturb_screen(ev.screen_pos, 26.0, ev.strength, to_screen, boat_ripple)
+		elif ev.kind == WorldStimulus.Kind.SURGE:
+			water_striders.disturb_screen(ev.screen_pos, 52.0, ev.strength, to_screen, boat_ripple)
 	)
 
 func on_squirt_impact(screen_pt: Vector2, vel: Vector2, pressure: float, wet_hit: bool) -> void:
@@ -778,16 +854,21 @@ func drift_floater(item: Floater, step: float) -> void:
 
 func advance_floaters(dt: float) -> void:
 	if clock >= leaf_due:
-		leaf_due = clock + randf_range(15.0, 25.0)
-		if not floaters.any(func(item: Floater) -> bool: return item.ambient):
-			for lane in [0.0, -9.0, 8.0]:
-				var start := Vector2(-4.0, lane)
-				if is_wet(start):
-					var leaf := Floater.new(start, false, 0.2)
-					leaf.afloat = true
-					leaf.ambient = true
-					floaters.append(leaf)
-					break
+		var due_span := world.profile.ambient_leaf_due
+		leaf_due = clock + randf_range(due_span.x, due_span.y)
+		var ambient_count := 0
+		for existing in floaters:
+			if existing.ambient:
+				ambient_count += 1
+		if ambient_count < world.profile.ambient_leaf_cap:
+			var lanes: Array[float] = [0.0, -9.0, 8.0, -4.0, 12.0]
+			var pick: float = lanes[ambient_count % lanes.size()]
+			var start := Vector2(-4.0, pick)
+			if is_wet(start):
+				var leaf := Floater.new(start, false, 0.2 + float(ambient_count) * 0.7)
+				leaf.afloat = true
+				leaf.ambient = true
+				floaters.append(leaf)
 	for i in range(floaters.size() - 1, -1, -1):
 		var item := floaters[i]
 		if item.is_firewood() or item.forage == Forage.DRY_GRASS:
@@ -797,6 +878,16 @@ func advance_floaters(dt: float) -> void:
 				item.soaked = clampf(item.soaked + dt * (rain.intensity * 0.31 - 0.15), 0.0, 1.0)
 		if item.planted and item != held_floater:
 			item.age = minf(1.0, item.age + dt)
+			# Heavy flood surge visibly rocks and can pull loose a planted creek branch!
+			if surge_at(item.point.x) > 0.72 and water.velocity_at(item.point).x > 42.0:
+				item.soaked = minf(1.0, item.soaked + dt * 0.9)
+				if item.soaked >= 0.98:
+					var hole_pt := forage_screen(item)
+					ground_traces.add_stake_hole(hole_pt, true, sample_surface(hole_pt))
+					item.planted = false
+					item.afloat = true
+					item.drift = Vector2(22.0, 0.0)
+					ripples.append(Vector4(item.point.x, item.point.y, 0.0, 0.22))
 		if item.host != null:
 			item.point = from_screen(forage_screen(item))
 			if not model.wall.has(item.host) and not lower.wall.has(item.host):
@@ -853,6 +944,14 @@ func advance(dt: float) -> void:
 	wind.advance(dt)
 	hearth.advance(dt, rain.intensity, wind)
 	flora.advance(dt, surge_at)
+	winter_ice.advance(dt, water, surge_at, clear_float_path, is_wet, to_screen, Hearth.CENTER, hearth.firelight)
+	# Sync planted creek branches into dam structural bracing so stakes genuinely reinforce adjacent pieces!
+	model.branch_braces.clear()
+	lower.branch_braces.clear()
+	for item in floaters:
+		if item.planted and item != held_floater and item.forage == Forage.THIN_BRANCH:
+			model.branch_braces.append(item.point)
+			lower.branch_braces.append(item.point)
 	var hearth_glow := Vector3(Hearth.CENTER.x / SIZE.x, Hearth.CENTER.y / SIZE.y, hearth.firelight)
 	scenery.advance(dt, wind, rain.wetness, rain.intensity, hearth_glow, day_phase)
 	advance_surge(dt)
@@ -902,11 +1001,16 @@ func advance(dt: float) -> void:
 	refresh_insect_terrain()
 	bird.advance(dt, pointer, rain.intensity, ground_insects.rocks, bird_spot_wet,
 		day_phase, rain.after_rain, rain.active_puddle_spots(), Hearth.CENTER, hearth.firelight > 0.15)
-	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple, day_phase)
+	var pointer_busy := holding_animal() or held != null or held_pipe != null or held_floater != null or squirt_gun.held
+	var live_pointer := Vector2.INF if pointer_busy else pointer
+	if not pointer_busy:
+		summer.notice_pointer(pointer)
+	ground_insects.advance(dt, to_screen, from_screen, insect_in_water, insect_ripple, day_phase, live_pointer)
 	var twilight_calm := smoothstep(1.10, 1.85, day_phase)
 	var frog_activity := clampf(maxf(smoothstep(0.80, 1.85, day_phase), rain.after_rain * 0.85), 0.0, 1.0) * world.profile.species_weight(&"frog")
-	frog.advance(dt, frog_clear, frog_activity, twilight_calm)
-	var pointer_busy := holding_animal() or held != null or held_pipe != null or held_floater != null or squirt_gun.held
+	frog.advance(dt, frog_clear, frog_activity, twilight_calm, live_pointer)
+	water_striders.advance(dt, water, world.profile.species_weight(&"water_strider"), twilight_calm,
+		clear_float_path, is_wet, to_screen, live_pointer, boat_ripple)
 	crab.advance(dt, pointer, pointer_busy, ground_insects.rocks, to_screen, from_screen, insect_in_water,
 		water, surge_at, crab_clear, insect_ripple, [ground_insects.mole.position, ground_insects.mantis.position, frog.position], day_phase)
 	for crawler in [ground_insects.mole, ground_insects.mantis]:
@@ -1160,9 +1264,11 @@ func _draw() -> void:
 	draw_ripples()
 	draw_shore_bubbles()
 	flora.draw(self, world, shade_color, foam_ink())
+	winter_ice.draw(self, to_screen, shade_color)
+	water_striders.draw(self, world.profile.species_weight(&"water_strider"), smoothstep(1.10, 1.85, day_phase), to_screen, shade_color)
 	rain.draw_puddles(self)
 	ground_traces.draw(self, shade_color)
-	summer.draw_land(self, shade_color, world.profile.id)
+	summer.draw_land(self, shade_color, world.profile.id, world.profile.grass_scale)
 	var hearth_hover := hearth.contains(pointer) and (hearth.can_ignite() if held_floater == null else can_fuel_hearth(held_floater))
 	hearth.draw_bed(self, hearth_hover)
 	if hovered_hearth:
@@ -1174,6 +1280,8 @@ func _draw() -> void:
 	var mantis_ok := world.profile.species_weight(&"mantis") > 0.05
 	ground_insects.draw(self, pointer, true, scenery.in_front_of_ledge, false, shade_color, mantis_ok)
 	draw_materials()
+	draw_dam_caulking(model)
+	draw_dam_caulking(lower)
 	draw_pipes()
 	draw_seams(model)
 	draw_seams(lower)
@@ -1568,6 +1676,33 @@ func draw_pipe_outflow(pipe: Pool.DrainPipe, mouth: Vector2) -> void:
 		var at := snap_pixel(landing + Vector2(phase * (3.0 + strength * 4.0), (i - 1) * phase * 2.0))
 		draw_rect(Rect2(at, Vector2(1.5, 0.5)), Color(FOAM, (1.0 - phase) * strength * 0.8))
 
+func draw_dam_caulking(basin: Pool) -> void:
+	# Pressed dark-wet clay mortar visually sealing joints where mud clods pack against dam stones!
+	for mud in basin.wall:
+		if mud.kind != Pool.EARTH or mud == held:
+			continue
+		var mp := piece_screen(mud)
+		for stone in basin.wall:
+			if stone.kind != Pool.STONE or stone == held or stone.tiers() != mud.tiers():
+				continue
+			var reach := (mud.radius + stone.radius) * 1.18
+			if mud.point.distance_to(stone.point) > reach:
+				continue
+			var sp := piece_screen(stone)
+			var mid := snap_pixel(mp.lerp(sp, 0.50) + Vector2(0.0, 2.0))
+			var dir := (sp - mp).normalized()
+			var side := dir.orthogonal()
+			var half_len := minf(mud.radius, stone.radius) * 0.42
+			var patch := PackedVector2Array([
+				snap_pixel(mid - side * half_len - dir * 1.4),
+				snap_pixel(mid + side * half_len - dir * 1.2),
+				snap_pixel(mid + side * (half_len * 0.85) + dir * 1.6),
+				snap_pixel(mid - side * (half_len * 0.85) + dir * 1.5),
+			])
+			draw_colored_polygon(patch, shade_color(Color("#47301e", 0.72), mid))
+			draw_line(snap_pixel(mid - side * (half_len * 0.7)), snap_pixel(mid + side * (half_len * 0.7)),
+				shade_color(Color("#8c623d", 0.82), mid), 0.75)
+
 func draw_materials() -> void:
 	var pieces := bank.duplicate()
 	pieces.append_array(model.wall)
@@ -1667,8 +1802,21 @@ func draw_drop_hint(canvas: Node2D) -> void:
 			draw_plus_badge(canvas, pointer - Vector2(0, 7.0))
 		elif held_floater.forage == Forage.THIN_BRANCH and not on_bank(pointer):
 			if clear_drop:
-				draw_dashed_ellipse(canvas, snap_pixel(pointer + Vector2(0, 2.0)), 4.5, 2.4,
-					Color("#c7f2df", 0.82), Color("#1c2924a8"))
+				var base_pt := snap_pixel(pointer + Vector2(0, 2.0))
+				var local_pt := from_screen(pointer)
+				var braces_dam := false
+				for basin: Pool in [model, lower]:
+					for piece in basin.wall:
+						if piece.point.distance_to(local_pt) < piece.radius + 14.0:
+							braces_dam = true
+							break
+				var ring_col := Color("#ffd97d", 0.86) if braces_dam else Color("#c7f2df", 0.82)
+				draw_dashed_ellipse(canvas, base_pt, 4.5, 2.4, ring_col, Color("#1c2924a8"))
+				# Translucent upright planted-stake ghost preview showing exact anchoring angle.
+				var ghost_tip := snap_pixel(base_pt + Vector2(3.0, -18.0))
+				canvas.draw_line(base_pt, ghost_tip, Color(ring_col, 0.56), 1.25)
+				if braces_dam:
+					draw_plus_badge(canvas, ghost_tip - Vector2(0.0, 3.0))
 			else:
 				draw_cross_badge(canvas, pointer + Vector2(0, 2.0))
 		elif not clear_drop:
@@ -1774,8 +1922,28 @@ func draw_floaters() -> void:
 			var hue_key := fposmod(item.shore.x * 0.137 + item.shore.y * 0.271, 1.0)
 			var leaf_top: Color = world.profile.pick_leaf_color(hue_key)
 			var leaf_edge: Color = world.profile.leaf_outline
-			var vein_col := leaf_top.lightened(0.30)
 			var shadow_col := Color("#1b2e2a5c") if (item.afloat and not carried) else Color("#2e291e66")
+			if world.season == SeasonProfile.Season.SPRING and item.ambient:
+				# Delicate cupped spring cherry/peach petal drifting down the creek!
+				var petal := PackedVector2Array()
+				var p_sh := PackedVector2Array()
+				for corner: Vector2 in [Vector2(-2.2, 0.0), Vector2(-0.9, -1.2), Vector2(1.4, -1.0), Vector2(2.4, 0.0), Vector2(1.1, 1.1), Vector2(-1.0, 1.0)]:
+					var rot := corner.rotated(item.angle)
+					p_sh.append(snap_pixel(point + rot + Vector2(0.5, 0.75)))
+					petal.append(snap_pixel(point + rot))
+				if not carried:
+					draw_colored_polygon(p_sh, shadow_col)
+				draw_colored_polygon(petal, shade_color(leaf_top, point))
+				draw_polyline(PackedVector2Array([petal[1], petal[2], petal[3]]), shade_color(leaf_top.lightened(0.24), point), 0.5)
+				if item == hovered_floater and held_floater == null:
+					draw_hover_halo(self, point, 5.5, 4.5)
+				continue
+			if world.season == SeasonProfile.Season.SPRING:
+				# Resting shore leaves in Spring are fresh tender young green leaves (never white-pink feathers).
+				var sp_greens: Array[Color] = [Color("#72a846"), Color("#87ba56"), Color("#5d913a")]
+				leaf_top = sp_greens[mini(2, floori(hue_key * 3.0))]
+				leaf_edge = Color("#2e4a22")
+			var vein_col := leaf_top.lightened(0.24)
 			var outline := PackedVector2Array()
 			var form := PackedVector2Array()
 			var upper := PackedVector2Array()
@@ -1814,10 +1982,12 @@ func forage_screen(item: Floater) -> Vector2:
 func forage_axis(item: Floater) -> Vector2:
 	if item.forage == Forage.DRY_GRASS:
 		return Vector2.from_angle(item.angle) * 9.0
-	var length := 8.0 if item.forage == Forage.FLOWER else (14.0 if item.forage == Forage.FOXTAIL else 21.0)
+	var foxtail_h := 14.0 * lerpf(0.76, 1.22, clampf((world.profile.grass_scale - 0.66) / 0.58, 0.0, 1.0))
+	var length := 8.0 if item.forage == Forage.FLOWER else (foxtail_h if item.forage == Forage.FOXTAIL else 21.0)
 	if item.planted and item != held_floater:
-		var lean := lerpf(3.0, 5.2, smoothstep(6.0, 45.0, water.velocity_at(item.point).x))
-		return Vector2(lean, -24.0)
+		var surge_lean := surge_at(item.point.x) * 4.5
+		var lean := lerpf(3.0, 5.6, smoothstep(6.0, 45.0, water.velocity_at(item.point).x)) + surge_lean
+		return Vector2(lean, -24.0 + surge_lean * 0.45)
 	if item.afloat or (item.forage == Forage.THIN_BRANCH and not item.planted and item != held_floater):
 		return Vector2.from_angle(item.angle) * length
 	var light := wind.flutter(roundi(item.shore.x) + 41) * (0.55 if item.forage == Forage.THIN_BRANCH else 1.25)
@@ -1856,18 +2026,46 @@ func draw_forage(item: Floater, carried: bool) -> void:
 		var twig_tip := snap_pixel(joint + axis * 0.24 + axis.normalized().orthogonal() * 2.8)
 		draw_line(joint, twig_tip, shade_color(item.tint.darkened(0.15 + item.soaked * 0.3), base), 0.65)
 	else:
+		var tuft_base := Color("#283822")
+		var tuft_a := Color("#4f6635")
+		var tuft_b := Color("#687d42")
+		var stem_out := Color("#364225")
+		var stem_mid := Color("#71814b")
+		var stem_hi := Color("#8e9b58")
+		match world.season:
+			SeasonProfile.Season.SPRING:
+				tuft_base = Color("#396326")
+				tuft_a = Color("#6aa33e")
+				tuft_b = Color("#88bf4e")
+				stem_out = Color("#4a782f")
+				stem_mid = Color("#7db347")
+				stem_hi = Color("#a3d460")
+			SeasonProfile.Season.SUMMER:
+				tuft_base = Color("#1c3617")
+				tuft_a = Color("#315c23")
+				tuft_b = Color("#4a7d2f")
+				stem_out = Color("#25471c")
+				stem_mid = Color("#49782d")
+				stem_hi = Color("#679c3f")
+			SeasonProfile.Season.WINTER:
+				tuft_base = Color("#4a4338")
+				tuft_a = Color("#736855")
+				tuft_b = Color("#8f826b")
+				stem_out = Color("#574e40")
+				stem_mid = Color("#877a63")
+				stem_hi = Color("#aba08a")
 		if item.rooted and not carried:
-			draw_rect(Rect2(snap_pixel(base + Vector2(-2.0, -0.5)), Vector2(4.0, 1.5)), shade_color(Color("#283822"), base))
+			draw_rect(Rect2(snap_pixel(base + Vector2(-2.0, -0.5)), Vector2(4.0, 1.5)), shade_color(tuft_base, base))
 			for leaf_off: Vector2 in [Vector2(-2.2, -1.2), Vector2(0.8, -1.4), Vector2(-0.5, -0.5)]:
 				draw_rect(Rect2(snap_pixel(base + leaf_off), Vector2(1.5, 1.0)),
-					shade_color(Color("#4f6635") if leaf_off.x < 0.0 else Color("#687d42"), base))
+					shade_color(tuft_a if leaf_off.x < 0.0 else tuft_b, base))
 		var along := axis.normalized()
 		var side := along.orthogonal()
 		var bow := 0.85 if axis.x >= 0.0 else -0.85
 		var joint := snap_pixel(base.lerp(tip, 0.48) - side * bow)
-		draw_polyline(PackedVector2Array([base, joint, tip]), shade_color(Color("#364225"), base), 1.2)
-		draw_polyline(PackedVector2Array([base, joint, tip]), shade_color(Color("#71814b"), base), 0.75)
-		draw_line(joint, snap_pixel(joint + along * 1.6 + side * 2.2), shade_color(Color("#8e9b58"), base), 0.75)
+		draw_polyline(PackedVector2Array([base, joint, tip]), shade_color(stem_out, base), 1.2)
+		draw_polyline(PackedVector2Array([base, joint, tip]), shade_color(stem_mid, base), 0.75)
+		draw_line(joint, snap_pixel(joint + along * 1.6 + side * 2.2), shade_color(stem_hi, base), 0.75)
 		if item.forage == Forage.FOXTAIL:
 			var seed_start := snap_pixel(tip - along * 4.8)
 			draw_line(seed_start, tip, shade_color(item.tint.darkened(0.35), base), 2.5)
@@ -1898,6 +2096,10 @@ func draw_planted_branch(item: Floater, bed: Vector2, axis: Vector2) -> void:
 
 	# The shadow is projected on the gravel. The wood's waterline follows local depth.
 	var visibility := 1.0 - smoothstep(0.24, 0.95, depth)
+	# Small gravel/mud anchoring collar tucked around the jammed stake base.
+	draw_rect(Rect2(snap_pixel(bed + Vector2(-2.0, -0.5)), Vector2(4.0, 1.5)), Color(Color("#2a3d36"), 0.55 * visibility))
+	draw_rect(Rect2(snap_pixel(bed + Vector2(-1.5, 0.25)), Vector2(1.0, 0.5)), shade_color(Color("#7a6851", 0.72 * visibility), bed))
+	draw_rect(Rect2(snap_pixel(bed + Vector2(1.0, -0.25)), Vector2(1.0, 0.5)), shade_color(Color("#665a49", 0.68 * visibility), bed))
 	var shadow := snap_pixel(bed + Vector2(9.5, 4.0))
 	draw_line(bed, shadow, Color(Color("#273831"), 0.48 * visibility), 1.4)
 	draw_line(bed, snap_pixel(bed + Vector2(4.0, 1.0)), Color(Color("#243a32"), 0.42 * visibility), 1.5)
@@ -2009,6 +2211,8 @@ func draw_rock(piece: Pool.Piece, p: Vector2, roll: float, damp: float, submersi
 	var winter := world.season == SeasonProfile.Season.WINTER
 	var stone_dry := Color("#a8badc").lerp(Color("#d8e4f7"), sunlight) if winter else Color("#dad1db").lerp(Color("#fff7ef"), sunlight)
 	var dry := (Color("#e0cfc4").lerp(Color("#fff5e6"), sunlight) if is_earth else stone_dry) * env
+	if hover_lift > 0.0:
+		dry *= Color(1.13, 1.11, 1.07)
 	var water_row := clampi(roundi((r * (0.71 - submersion * 0.92) - origin.y) * 2.0), 0, int(size.y))
 	draw_set_transform(body_p, roll, Vector2(wear_scale, squash * wear_scale))
 	if submersion > 0.06 and water_row < int(size.y):

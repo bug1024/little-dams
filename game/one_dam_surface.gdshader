@@ -15,6 +15,9 @@ uniform float bed_refraction : hint_range(0.0, 1.0) = 1.0;
 uniform float bank_foam : hint_range(0.0, 1.0) = 1.0;
 uniform vec4 wind_travel;
 uniform float rain_intensity;
+uniform float spring_amount = 0.0;
+uniform float summer_amount = 0.0;
+uniform float autumn_amount = 0.0;
 uniform float winter_amount = 0.0;
 uniform vec3 hearth_light = vec3(0.73125, 0.77, 0.0);
 const vec2 WIND = vec2(0.94, 0.34);
@@ -107,24 +110,33 @@ void fragment() {
 	vec3 shallow_water = submerged_plate * vec3(0.81, 0.86, 0.83) + vec3(0.036, 0.022, 0.005);
 	shallow_water = mix(shallow_water, damp_gravel * vec3(0.85, 1.09, 1.14), 0.30 + bank * 0.21);
 	vec3 pool = mix(vec3(0.073, 0.19, 0.23), plate * vec3(0.51, 0.63, 0.80), 0.54);
-	pool = mix(pool, vec3(0.09, 0.22, 0.32), winter_amount * 0.30);
+	pool = mix(pool, vec3(0.06, 0.24, 0.24), summer_amount * 0.24);
+	pool = mix(pool, vec3(0.09, 0.22, 0.32), winter_amount * 0.32);
+	float dusk = dusk_weight();
+	float twi = twilight_weight();
+	// Deepen evening pools so twilight water reads quiet, glassy, and translucent rather than daytime bright.
+	pool = mix(pool, vec3(0.035, 0.082, 0.155), twi * 0.62);
 	vec3 water = mix(shallow_water, pool, deep * 0.90);
 	water = mix(water, water * vec3(0.62, 0.76, 0.88) + vec3(0.004, 0.009, 0.016), held_water * 0.76);
 	float algae = slow * (1.0 - deep) * smoothstep(0.42, 0.76, patches + veins * 0.19 + shade * 0.11) * (1.0 - winter_amount);
-	water = mix(water, vec3(0.23, 0.27, 0.17), algae * 0.19);
+	water = mix(water, vec3(0.23, 0.27, 0.17), algae * (0.19 + summer_amount * 0.06));
 	water = mix(water, sediment, min(0.87, silt * (1.0 - deep * 0.87) * 0.39 + state.a * 0.69));
 
-	float dusk = dusk_weight();
-	float twi = twilight_weight();
 	float breeze = wind_at(art_uv.x);
-	float lit = 1.0 - shade * 0.65;
+	float lit = 1.0 - shade * (0.65 + summer_amount * 0.14 - spring_amount * 0.08);
 	float sun = lit * smoothstep(0.35, 0.9, art_uv.x + art_uv.y * 0.52) * (0.61 + sunlight_at(art_uv) * 0.59);
-	sun *= 1.0 - rain_intensity * 0.73;
-	float glint = step(0.93, sin(pixel.x * 0.123 - creek_time * 1.6 + sin(pixel.y * 0.29)));
+	sun *= (1.0 - rain_intensity * 0.73) * (1.0 - twi * 0.86);
+	float glint = step(0.93 - summer_amount * 0.02, sin(pixel.x * 0.123 - creek_time * 1.6 + sin(pixel.y * 0.29)));
 	glint *= smoothstep(0.47, 0.72, earth_patch(pixel / vec2(11.0, 3.5) - shore.gb * 0.025));
-	vec3 glint_col = mix(vec3(0.83, 0.88, 0.80), vec3(0.98, 0.74, 0.46), dusk);
+	vec3 glint_col = mix(vec3(0.83, 0.88, 0.80), vec3(0.96, 1.0, 0.92), summer_amount);
+	glint_col = mix(glint_col, vec3(0.98, 0.74, 0.46), dusk);
 	glint_col = mix(glint_col, vec3(0.66, 0.80, 0.94), twi);
-	water = mix(water, glint_col, glint * sun * (1.0 - deep * 0.76) * (0.26 + breeze * 0.12 + dusk * 0.14));
+	water = mix(water, glint_col, glint * sun * (1.0 - deep * 0.76) * (0.26 + summer_amount * 0.16 + breeze * 0.12 + dusk * 0.14));
+	// Subtle dusk/twilight sky mirror across calm slow creek reaches (faint rose-amber zenith & slate blue).
+	float sky_mirror = (0.38 + slow * 0.42 + held_water * 0.35) * (1.0 - shade * 0.72) * (1.0 - rain_intensity * 0.65);
+	float mirror_wave = 0.65 + 0.35 * sin(pixel.x * 0.09 - creek_time * 0.9 + sin(pixel.y * 0.22) * 1.2);
+	vec3 sky_ref_col = mix(vec3(0.24, 0.33, 0.54), vec3(0.58, 0.40, 0.44), smoothstep(0.30, 0.92, art_uv.x) * (1.0 - art_uv.y * 0.45));
+	water = mix(water, sky_ref_col, clamp(sky_mirror * mirror_wave * (dusk * 0.18 + twi * 0.26), 0.0, 0.34));
 
 	// Gusts roughen patches of the surface that drift downwind and sparkle where the sun reaches.
 	vec2 drift = motion - WIND * downwind_sample(wind_travel, art_uv.x);
@@ -168,12 +180,12 @@ void fragment() {
 	cover = mix(cover, 1.0, trickle * 0.45);
 	vec3 final_surface = afternoon_light(mix(mix(gravel, damp_gravel, damp), water, cover), art_uv, max(cover, damp * 0.59));
 	if (hearth_light.z > 0.005) {
-		vec2 reflect_center = hearth_light.xy - vec2(0.03, 0.26);
-		vec2 reflect_off = (art_uv - reflect_center) / vec2(0.16, 0.18);
-		float reflect_falloff = pow(max(0.0, 1.0 - length(reflect_off)), 1.9);
-		float shimmer = 0.55 + 0.45 * sin(pixel.x * 0.19 - creek_time * 3.1 + sin(pixel.y * 0.42) * 1.4);
-		float fire_ref = reflect_falloff * cover * hearth_light.z * shimmer * (0.35 + dusk * 0.55 + twi * 1.15);
-		final_surface += vec3(0.32, 0.145, 0.038) * fire_ref;
+		vec2 reflect_center = hearth_light.xy - vec2(0.03, 0.25);
+		vec2 reflect_off = (art_uv - reflect_center) / vec2(0.19, 0.21);
+		float reflect_falloff = pow(max(0.0, 1.0 - length(reflect_off)), 1.75);
+		float shimmer = 0.52 + 0.48 * sin(pixel.x * 0.19 - creek_time * 3.1 + sin(pixel.y * 0.42) * 1.4);
+		float fire_ref = reflect_falloff * cover * hearth_light.z * shimmer * (0.38 + dusk * 0.62 + twi * 1.35);
+		final_surface += vec3(0.36, 0.165, 0.044) * fire_ref;
 	}
 	vec3 water_mist = mix(vec3(0.58, 0.66, 0.69), vec3(0.62, 0.52, 0.50), dusk * 0.75);
 	water_mist = mix(water_mist, vec3(0.24, 0.32, 0.46), twi);

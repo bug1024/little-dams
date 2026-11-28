@@ -107,6 +107,10 @@ func reset_cicada() -> void:
 	cicada_twitch = 0.0
 	cicada_twitch_due = 4.2
 
+func notice_pointer(point: Vector2) -> void:
+	if not cicada_held and cicada_position.distance_to(point) < 16.0:
+		cicada_twitch = maxf(cicada_twitch, 0.62)
+
 func grab_cicada() -> void:
 	cicada_held = true
 	cicada_singing = false
@@ -421,7 +425,7 @@ func draw_fish(canvas: Node2D, project: Callable, pointer: Vector2, foreground :
 func apply_tint(color: Color, at: Vector2, tint_at: Callable) -> Color:
 	return tint_at.call(color, at) if tint_at.is_valid() else color
 
-func draw_land(canvas: Node2D, tint_at: Callable = Callable(), season_id := &"autumn") -> void:
+func draw_land(canvas: Node2D, tint_at: Callable = Callable(), season_id := &"autumn", grass_scale := 1.0) -> void:
 	var root_col := Color("#333d20")
 	var base_col := Color("#454c2d")
 	var stem_a := Color("#596332")
@@ -430,19 +434,19 @@ func draw_land(canvas: Node2D, tint_at: Callable = Callable(), season_id := &"au
 	var litter_b := Color("#766145")
 	match season_id:
 		&"spring":
-			root_col = Color("#2e4a22")
-			base_col = Color("#466e31")
-			stem_a = Color("#63943c")
-			stem_b = Color("#87b84f")
-			litter_a = Color("#eab7c4")
-			litter_b = Color("#d99aae")
+			root_col = Color("#345926")
+			base_col = Color("#548536")
+			stem_a = Color("#74ad44")
+			stem_b = Color("#9fd15c")
+			litter_a = Color("#f6c5d3")
+			litter_b = Color("#eaa2b7")
 		&"summer":
-			root_col = Color("#223d1c")
-			base_col = Color("#345c28")
-			stem_a = Color("#4a8034")
-			stem_b = Color("#6ba342")
-			litter_a = Color("#587a3b")
-			litter_b = Color("#4b6935")
+			root_col = Color("#1c3617")
+			base_col = Color("#2d5422")
+			stem_a = Color("#42782e")
+			stem_b = Color("#639e3d")
+			litter_a = Color("#4e7034")
+			litter_b = Color("#415e2d")
 		&"winter":
 			root_col = Color("#4c4d4a")
 			base_col = Color("#6e6b62")
@@ -454,17 +458,44 @@ func draw_land(canvas: Node2D, tint_at: Callable = Callable(), season_id := &"au
 		var data: Vector3 = SEDGES[i]
 		var root := Vector2(data.x, data.y)
 		canvas.draw_rect(Rect2((root * 2.0).round() * 0.5 - Vector2(1.5, 0.5), Vector2(3.0, 1.25)), apply_tint(root_col, root, tint_at))
-		for stem in (4 if data.z >= 5.0 else 3):
-			var span := (stem - 1.4) * 2.0
-			var height := data.z * (0.73 + stem % 3 * 0.16)
+		var stem_count := 4 if data.z >= 5.0 else 3
+		if season_id == &"summer":
+			stem_count += 1
+		elif season_id == &"spring" and data.z < 5.0:
+			stem_count = 2
+		for stem in stem_count:
+			var span := (stem - float(stem_count - 1) * 0.45) * (2.15 if season_id == &"summer" else 1.85)
+			var height := data.z * grass_scale * (0.73 + stem % 3 * 0.16)
 			var sway := plant_sway(i, stem)
+			var snow_droop := 1.4 if season_id == &"winter" else 0.0
 			var split := root + Vector2(span * 0.37 + sway * 0.19, -height * 0.54)
-			var tip := plant_tip(i, stem)
+			var tip := Vector2(root.x + span + sway + snow_droop, root.y - height)
 			var ink := stem_a if stem % 2 == 0 else stem_b
-			canvas.draw_line(root, split, apply_tint(base_col, root, tint_at), 0.5)
-			canvas.draw_line(split, tip, apply_tint(ink, root, tint_at), 0.5)
+			var w := 0.65 if season_id == &"summer" else 0.5
+			canvas.draw_line(root, split, apply_tint(base_col, root, tint_at), w)
+			canvas.draw_line(split, tip, apply_tint(ink, root, tint_at), w)
 			var blade := split.lerp(tip, 0.53)
-			canvas.draw_line(blade, blade + Vector2(1.0 + sway * 0.6, -1.1), apply_tint(ink.lightened(0.11), root, tint_at), 0.5)
+			canvas.draw_line(blade, blade + Vector2(1.0 + sway * 0.6, -1.1 * grass_scale), apply_tint(ink.lightened(0.11), root, tint_at), 0.5)
+
+	# Restrained fresh spring sprouts and tiny white/blush micro-blossoms hugging damp bank edges.
+	if season_id == &"spring":
+		var sprout_g := Color("#88c452")
+		var sprout_d := Color("#4e8232")
+		var bloom_w := Color("#fcf7ec")
+		var bloom_p := Color("#f7bfd0")
+		var bloom_y := Color("#f0cf65")
+		for sp: Vector3 in [
+			Vector3(38, 134, 0), Vector3(72, 146, 1), Vector3(132, 152, 0),
+			Vector3(172, 156, 1), Vector3(114, 72, 0), Vector3(168, 66, 1),
+			Vector3(244, 126, 0), Vector3(260, 44, 1),
+		]:
+			var pt := snap(Vector2(sp.x, sp.y))
+			canvas.draw_rect(Rect2(pt + Vector2(-1.0, 0.0), Vector2(2.0, 0.5)), apply_tint(sprout_d, pt, tint_at))
+			canvas.draw_rect(Rect2(pt + Vector2(-0.5, -1.0), Vector2(0.5, 1.0)), apply_tint(sprout_g, pt, tint_at))
+			canvas.draw_rect(Rect2(pt + Vector2(0.5, -1.5), Vector2(0.5, 1.5)), apply_tint(sprout_g, pt, tint_at))
+			var petal := bloom_w if sp.z < 0.5 else bloom_p
+			canvas.draw_rect(Rect2(pt + Vector2(0.0, -2.0), Vector2(1.0, 1.0)), apply_tint(petal, pt, tint_at))
+			canvas.draw_rect(Rect2(pt + Vector2(0.25, -1.75), Vector2(0.5, 0.5)), apply_tint(bloom_y, pt, tint_at))
 
 	draw_cicada_perch(canvas, tint_at, season_id)
 	for leaf in [Vector3(58, 155, -0.7), Vector3(60.5, 154, 0.6), Vector3(59, 157, 2.9),

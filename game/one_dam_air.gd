@@ -44,7 +44,7 @@ func _ready() -> void:
 		Vector2(28, 134), Vector2(46, 152), Vector2(78, 138), Vector2(128, 154),
 		Vector2(174, 140), Vector2(236, 126), Vector2(278, 120), Vector2(256, 158),
 		Vector2(54, 42), Vector2(118, 44), Vector2(168, 56), Vector2(218, 36),
-		Vector2(286, 46), Vector2(148, 114),
+		Vector2(286, 46), Vector2(148, 108), Vector2(92, 114), Vector2(212, 92),
 	]:
 		var f := Firefly.new()
 		f.anchor = spot
@@ -159,16 +159,24 @@ func _draw() -> void:
 	var dusk := smoothstep(0.0, 1.0, phase) * (1.0 - smoothstep(1.0, 2.0, phase))
 	var twi := smoothstep(0.85, 2.0, phase)
 	var light_shift := Vector2(wind.sunlight.x, wind.sunlight.y)
-	var dust_tint := Color(1.0, 0.92, 0.70).lerp(Color(1.0, 0.78, 0.46), dusk)
+	var season_id := _season_id()
+	var dust_scale := 0.25 if season_id == &"winter" else (1.35 if season_id == &"summer" else (0.75 if season_id == &"spring" else 1.0))
+	var dust_tint := Color(1.0, 0.94, 0.72).lerp(Color(1.0, 0.78, 0.46), dusk)
+	if season_id == &"spring":
+		dust_tint = Color(1.0, 0.96, 0.92).lerp(Color(1.0, 0.84, 0.72), dusk)
 	for mote in dust:
 		var p := mote.ground / SIZE
-		var light := Wind.sun_shafts(p - light_shift, clock, breeze(mote.ground)) * wind.sunlight.z * (1.0 - twi * 0.92)
+		var light := Wind.sun_shafts(p - light_shift, clock, breeze(mote.ground)) * wind.sunlight.z * (1.0 - twi * 0.92) * dust_scale
 		light *= 0.5 + 0.5 * sin(clock * 3.0 + mote.phase)
 		if light > 0.05:
-			draw_rect(Rect2(snap(mote.ground), Vector2(0.5, 0.5)), Color(dust_tint, minf(0.85, light * 1.1)))
-	var season_id := _season_id()
+			draw_rect(Rect2(snap(mote.ground), Vector2(0.5, 0.5)), Color(dust_tint, minf(0.88, light * 1.1)))
 	var gnat_vis := 0.0 if season_id == &"winter" else (1.0 - smoothstep(0.85, 1.65, phase))
-	draw_gnats(gnat_vis)
+	if season_id == &"spring":
+		gnat_vis *= 0.45
+	draw_gnats(gnat_vis, GNATS, 0.0)
+	if season_id == &"summer":
+		# Lively midsummer adds a second dappled gnat cloud near the lush lower-left reeds.
+		draw_gnats(gnat_vis * 0.85, Vector2(52.0, 144.0), 2.7)
 	if season_id == &"winter":
 		for flake in snow_motes:
 			var at := snap(flake.ground)
@@ -203,17 +211,24 @@ func draw_fireflies(activity: float) -> void:
 		if pulse <= 0.04:
 			continue
 		var at := snap(f.pos)
+		# Delicate shimmering firefly water-surface reflection when hovering over/near the creek!
+		if view != null and view.water != null:
+			var ref_screen := at + Vector2(sin(clock * 3.4 + f.phase) * 0.8, 7.5)
+			if not view.on_bank(ref_screen) and view.is_wet(view.from_screen(ref_screen)):
+				var ref_pt := snap(ref_screen)
+				draw_rect(Rect2(ref_pt - Vector2(1.5, 0.25), Vector2(3.0, 0.5)), Color(0.68, 0.86, 0.42, pulse * 0.34))
+				draw_rect(Rect2(ref_pt + Vector2(-0.5, 1.0), Vector2(1.5, 0.5)), Color(0.84, 0.94, 0.54, pulse * 0.22))
 		draw_rect(Rect2(at - Vector2(2.0, 2.0), Vector2(4.5, 4.5)), Color(0.45, 0.72, 0.31, pulse * 0.20))
 		draw_rect(Rect2(at - Vector2(1.0, 1.0), Vector2(2.5, 2.5)), Color(0.66, 0.84, 0.35, pulse * 0.45))
 		draw_rect(Rect2(at, Vector2(0.75, 0.75)), Color(0.91, 0.96, 0.55, minf(1.0, pulse * 0.95)))
 
-func draw_gnats(visibility := 1.0) -> void:
+func draw_gnats(visibility := 1.0, anchor := GNATS, phase_shift := 0.0) -> void:
 	if visibility <= 0.02:
 		return
-	var center := GNATS + Vector2(sin(clock * 0.27) * 4.0, sin(clock * 0.19 + 1.0) * 2.5) + Wind.DIRECTION * breeze(GNATS) * 5.0
+	var center := anchor + Vector2(sin(clock * 0.27 + phase_shift) * 4.0, sin(clock * 0.19 + 1.0 + phase_shift) * 2.5) + Wind.DIRECTION * breeze(anchor) * 5.0
 	for i in 7:
-		var offset := Vector2(sin(clock * (4.1 + i * 0.7) + i * 1.9) * 3.2, cos(clock * (5.3 + i * 0.55) + i * 2.7) * 2.2 - 11.0)
-		var glint := sin(clock * 9.0 + i * 2.3) > 0.72
+		var offset := Vector2(sin(clock * (4.1 + i * 0.7) + i * 1.9 + phase_shift) * 3.2, cos(clock * (5.3 + i * 0.55) + i * 2.7 + phase_shift) * 2.2 - 11.0)
+		var glint := sin(clock * 9.0 + i * 2.3 + phase_shift) > 0.72
 		var ink := Color(1.0, 0.90, 0.62, 0.85 * visibility) if glint else Color(0.17, 0.16, 0.12, 0.7 * visibility)
 		draw_rect(Rect2(snap(center + offset), Vector2(0.5, 0.5)), ink)
 

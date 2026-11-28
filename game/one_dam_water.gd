@@ -61,10 +61,12 @@ class DrainPipe:
 
 var wall: Array[Piece] = []
 var pipes: Array[DrainPipe] = []
+var branch_braces: Array[Vector2] = []
 
 func reset() -> void:
 	wall.clear()
 	pipes.clear()
+	branch_braces.clear()
 
 func settle(dt: float) -> void:
 	for piece in wall:
@@ -154,6 +156,14 @@ func bracing(piece: Piece) -> float:
 		var mass := clampf(neighbor.radius / piece.radius, 0.5, 1.7)
 		var faces := 1.0 if neighbor.tiers() == piece.tiers() else 0.4
 		amount += contact * (0.72 + 0.64 * behind * mass) * faces
+	# Planted creek branches tucked behind/beside a dam piece act as real wooden stakes bracing it!
+	for stake in branch_braces:
+		var dist := piece.point.distance_to(stake)
+		var reach := piece.radius + 14.0
+		if dist < reach:
+			var contact := 1.0 - dist / reach
+			var downstream_support := smoothstep(-5.0, 7.0, stake.x - piece.point.x)
+			amount += contact * (0.45 + 0.68 * downstream_support)
 	return amount
 
 func center(fallback: float) -> float:

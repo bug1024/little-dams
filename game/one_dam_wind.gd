@@ -23,6 +23,14 @@ var sun_from := sunlight
 var sun_to := Vector3(0.036, -0.021, 0.90)
 var sun_age := 0.0
 var sun_duration := 33.0
+var gust_scale := 1.0
+var gust_interval := Vector2(4.5, 12.0)
+
+func set_season_tuning(p_scale: float, p_interval: Vector2) -> void:
+	gust_scale = clampf(p_scale, 0.5, 1.8)
+	gust_interval = p_interval
+	if next_gust > clock + gust_interval.y:
+		next_gust = clock + rng.randf_range(gust_interval.x, gust_interval.y)
 
 func _init() -> void:
 	history.resize(ceili(CROSSING / SAMPLE) + 2)
@@ -31,9 +39,9 @@ func _init() -> void:
 func advance(dt: float) -> void:
 	clock += dt
 	if clock >= next_gust:
-		target = rng.randf_range(0.55, 1.0)
-		release = clock + rng.randf_range(1.6, 4.2)
-		next_gust = release + rng.randf_range(4.5, 12.0)
+		target = clampf(rng.randf_range(0.55, 1.0) * gust_scale, 0.35, 1.25)
+		release = clock + rng.randf_range(1.6, 4.2) * clampf(gust_scale, 0.85, 1.30)
+		next_gust = release + rng.randf_range(gust_interval.x, gust_interval.y)
 	elif clock >= release:
 		target = 0.0
 	gust = move_toward(gust, target, dt * (0.9 if target > gust else 0.32))

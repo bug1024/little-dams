@@ -335,6 +335,38 @@ static func steam_hiss() -> AudioStreamWAV:
 	stream.data = samples
 	return stream
 
+static func ice_crack() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.24
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8191
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var p1 := 0.0
+	var p2 := 0.0
+	var hp := 0.0
+	var prev := 0.0
+	for i in FRAMES:
+		var time := float(i) / float(RATE)
+		var t := time / DURATION
+		# Two crisp brittle ice snaps + bright crystalline ring!
+		var snap1 := exp(-time * 78.0)
+		var snap2 := exp(-maxf(0.0, time - 0.045) * 62.0) if time >= 0.045 else 0.0
+		var ring := exp(-time * 22.0) * (1.0 - smoothstep(0.65, 1.0, t))
+		var white := rng.randf_range(-1.0, 1.0)
+		hp = 0.80 * (hp + white - prev)
+		prev = white
+		p1 += TAU * 2380.0 / float(RATE)
+		p2 += TAU * 3620.0 / float(RATE)
+		var val := hp * (snap1 * 0.95 + snap2 * 0.72) + (sin(p1) * 0.52 + sin(p2) * 0.34) * ring * 0.42
+		samples.encode_s16(i * 2, clampi(roundi(val * 15000.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
 static func shutter_click() -> AudioStreamWAV:
 	const RATE := 22050
 	const DURATION := 0.12
@@ -556,4 +588,133 @@ static func squirt_jet() -> AudioStreamWAV:
 	stream.data = samples
 	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
 	stream.loop_end = FRAMES
+	return stream
+
+static func evening_crickets() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 4.2
+	const FRAMES := roundi(RATE * DURATION)
+	const FADE := 3200
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8461
+	var buffer := PackedFloat32Array()
+	buffer.resize(FRAMES + FADE)
+	var phase_a := 0.0
+	var phase_b := 0.0
+	for i in buffer.size():
+		var t := float(i) / RATE
+		# Two staggered soft field-cricket voices with warm rhythmic 3-pulse chirps.
+		var cyc_a := fposmod(t, 0.84)
+		var pulse_a := 0.0
+		if cyc_a < 0.36:
+			var sub := fposmod(cyc_a, 0.12) / 0.12
+			pulse_a = smoothstep(0.04, 0.25, sub) * (1.0 - smoothstep(0.55, 0.96, sub))
+		var cyc_b := fposmod(t + 0.43, 1.05)
+		var pulse_b := 0.0
+		if cyc_b < 0.28:
+			var sub := fposmod(cyc_b, 0.093) / 0.093
+			pulse_b = smoothstep(0.05, 0.28, sub) * (1.0 - smoothstep(0.58, 0.96, sub)) * 0.72
+		phase_a += TAU * (3860.0 + sin(TAU * 4.5 * t) * 18.0) / RATE
+		phase_b += TAU * (4290.0 + sin(TAU * 3.1 * t) * 22.0) / RATE
+		var voice_a := (sin(phase_a) * 0.78 + sin(phase_a * 2.0) * 0.12) * pulse_a
+		var voice_b := (sin(phase_b) * 0.74 + sin(phase_b * 1.5) * 0.10) * pulse_b
+		var air := rng.randf_range(-0.025, 0.025)
+		buffer[i] = (voice_a + voice_b) * 0.52 + air
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	for i in FRAMES:
+		var value := buffer[i]
+		if i < FADE:
+			value = lerpf(buffer[FRAMES + i], value, smoothstep(0.0, 1.0, float(i) / FADE))
+		samples.encode_s16(i * 2, clampi(roundi(value * 9200.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_end = FRAMES
+	return stream
+
+static func leaf_rustle() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.44
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8623
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var hp_prev := 0.0
+	var lp := 0.0
+	var lp2 := 0.0
+	for i in FRAMES:
+		var t := float(i) / float(FRAMES)
+		var swell := smoothstep(0.0, 0.34, t) * (1.0 - smoothstep(0.45, 1.0, t))
+		var flutter := 0.70 + 0.30 * sin(TAU * 7.5 * t)
+		var white := rng.randf_range(-1.0, 1.0)
+		var hp := white - hp_prev * 0.82
+		hp_prev = white
+		lp += (hp - lp) * 0.36
+		lp2 += (lp - lp2) * 0.24
+		var sound := (lp - lp2 * 0.45) * swell * flutter
+		samples.encode_s16(i * 2, clampi(roundi(sound * 8800.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
+static func stake_foley() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.16
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8779
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var phase := 0.0
+	var hp_prev := 0.0
+	var grit := 0.0
+	for i in FRAMES:
+		var t := float(i) / float(FRAMES)
+		var env := smoothstep(0.0, 0.08, t) * exp(-t * 5.2)
+		phase += TAU * lerpf(210.0, 115.0, t) / RATE
+		var white := rng.randf_range(-1.0, 1.0)
+		var hp := white - hp_prev * 0.70
+		hp_prev = white
+		grit += (hp - grit) * 0.45
+		var wood := sin(phase) * 0.56 + grit * 0.65
+		samples.encode_s16(i * 2, clampi(roundi(wood * env * 12000.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
+	return stream
+
+static func scurry_foley() -> AudioStreamWAV:
+	const RATE := 22050
+	const DURATION := 0.13
+	const FRAMES := roundi(RATE * DURATION)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8893
+	var samples := PackedByteArray()
+	samples.resize(FRAMES * 2)
+	var hp_prev := 0.0
+	var lp := 0.0
+	var blip_p := 0.0
+	for i in FRAMES:
+		var time := float(i) / RATE
+		var t := time / DURATION
+		var beats := 0.35 + 0.65 * pow(maxf(0.0, sin(TAU * 24.0 * time)), 1.4)
+		var env := smoothstep(0.0, 0.12, t) * (1.0 - smoothstep(0.40, 1.0, t)) * beats
+		var white := rng.randf_range(-1.0, 1.0)
+		var hp := white - hp_prev * 0.85
+		hp_prev = white
+		lp += (hp - lp) * 0.44
+		blip_p += TAU * lerpf(1550.0, 2250.0, t) / RATE
+		var sound := (lp * 1.15 + sin(blip_p) * 0.18) * env
+		samples.encode_s16(i * 2, clampi(roundi(sound * 8200.0), -32768, 32767))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = RATE
+	stream.data = samples
 	return stream
